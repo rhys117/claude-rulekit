@@ -59,17 +59,35 @@ Delete any rule that does not fit your team. Soften `block` to `warn`, or `block
 
 ---
 
-## What was intentionally left out
+## Add your own rule
 
-Several rules from the source app were dropped because they do not generalize:
+A rule is a YAML entry keyed by a unique name. Put edit-time rules in `write.yml` and search-time rules in `read.yml`:
 
-- **Controller pattern enforcement** (`CRUDResource`, adapter pattern) — these assume a specific resource controller abstraction.
-- **View component system** (`UI.*` components, semantic color palette) — these assume a specific design system.
-- **Fixture kit nudge** (`spec_heavy_setup`) — the rule references fixture names and a fabricator setup that are app-specific.
-- **Sorbet inline RBS** — useful if your app uses Sorbet, but not a universal Rails convention.
-- **Feature flag registry** — references two specific internal flag systems.
+```yaml
+no_raw_execute:
+  type: warn                   # warn, block, or block_once
+  files: ["app/models/**/*.rb"]
+  pattern: '\.execute\('        # optional Ruby regex on the new content
+  context: "Prefer a scope or Arel over a raw connection.execute in a model."
+```
 
-Write your own rules for these. The `write.yml` and `read.yml` files are straightforward YAML. If the logic is more than a regex, drop a detector in `detectors/<rule_name>.rb`.
+The `files` glob and optional `pattern` decide when it fires. `context` is the message the agent sees. `warn` lets the edit through with the note, `block` refuses it, and `block_once` refuses the first attempt then yields on a retry.
+
+When a regex is not enough, add a detector at `detectors/<rule_name>.rb`. It reads project state and decides:
+
+```ruby
+module Detectors
+  module NoRawExecute
+    def self.call(file_path:, new_content:, **)
+      return false unless new_content.match?(/\.execute\(/)
+      true   # false to stay silent, true to use the YAML context above,
+             # or { context: "custom message" } to override it
+    end
+  end
+end
+```
+
+The module name is the CamelCase of the rule name. The full field list, the detector return contract, and the read-side `roots:` style config are documented in the [top-level README](../../README.md#how-rules-work).
 
 ---
 
