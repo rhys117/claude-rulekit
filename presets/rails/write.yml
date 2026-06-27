@@ -1,0 +1,159 @@
+# Content + advisory rules enforced by the write-rules check on
+# Edit / MultiEdit / Write tool calls.
+#
+# Each rule:
+#   type:              "block"      — deny tool call every time.
+#                      "block_once" — deny on first hit per session, allow
+#                                     silently on retry (escape hatch for
+#                                     legitimate uses).
+#                      "warn"       — inject context. Honours once_per_session.
+#   files:             Globs (relative to project root, ** supported).
+#   pattern:           Optional Ruby regex matched against the new content.
+#                      Omit to fire on file-glob match alone.
+#   context:           Static message returned to Claude (may be overridden by
+#                      a detector).
+#   once_per_session:  Optional, warn-only. When true the rule fires at most
+#                      once per session (sentinel under tmp/.claude-advisory/).
+#                      Block rules ignore this flag; use block_once instead.
+#
+# Per-rule detection logic lives in detectors/<rule_name>.rb. Without a
+# detector, the rule fires whenever its files glob (and optional pattern)
+# match. A detector may override the context message for a given fire.
+#
+# Rule names must be unique across write.yml AND read.yml — both scripts
+# share the same per-session sentinel namespace.
+
+no_default_scope:
+  type: block
+  pattern: '(?<!\w)default_scope(?!\w)'
+  files:
+    - 'app/models/**/*'
+  context: >
+    We do not allow default scopes to be used. Depending on your use-case
+    consider using something like `active`, `inactive` and `all` with
+    enforcement at the call sites instead.
+
+service_call_idiom:
+  type: block_once
+  pattern: '^\s*def\s+(self\.)?call\b'
+  files:
+    - 'app/models/**/*.rb'
+    - 'app/services/**/*.rb'
+  context: >
+    You're defining `def call` / `def self.call` — the canonical
+    service-object idiom. Run the DDD check before proceeding. (1) Does
+    this class coordinate behavior across multiple aggregates? If it just
+    wraps save/update/create on a single model, push the logic onto the
+    model (or a callback / concern). (2) The class name should read as a
+    domain action; if you're reaching for `call` to make a noun feel like
+    a verb, the abstraction is probably misplaced. (3) `def self.call`
+    that just forwards to `new(...).call` is pure ceremony — callers can
+    write `Klass.new(args).call` directly, which keeps the keyword
+    signature in one place. Escape hatch — if `call` is required to
+    satisfy an external callable interface (framework contract, library
+    expectation, background-job interface), re-run the edit and it will go
+    through; this rule blocks once per session.
+
+service_design_advisory:
+  type: warn
+  once_per_session: true
+  context: >
+    You are creating or editing a service object. STOP and verify this belongs
+    here. Services in app/services/ must encapsulate meaningful cross-aggregate
+    domain operations (DDD). If this service only wraps .save, .update, or
+    .create on a single model, it belongs in the model or controller — not here.
+    Ask: does this coordinate behavior across multiple models/aggregates, or
+    just wrap save/update/create? If it's the latter, move the logic closer to
+    the model. Also consider: could this be a model method, a callback, or a
+    concern instead?
+  files:
+    - 'app/services/**/*'
+
+model_wrapper_delegation:
+  type: warn
+  once_per_session: true
+  pattern: '^\s*def\s+\w+'
+  files:
+    - 'app/models/*.rb'
+
+migration_design_advisory:
+  type: warn
+  once_per_session: true
+  context: >
+    Editing a migration. STOP and confirm before proceeding: (1) PERSISTENCE
+    NECESSARY? Walk the data's lifecycle — ephemeral (params), session, user
+    pref (jsonb), or genuine domain state. If it's transient, do not persist;
+    ask the user if unsure. (2) BOOLEAN? Only for a real two-state flag with no
+    foreseeable third state. Prefer status enums or timestamps (e.g.
+    activated_at, archived_at) — they carry more information and leave room to
+    grow. (3) NAMING — drop the table-name prefix on columns (e.g.
+    users.user_name → users.name). Apply the same rule to associations.
+    (4) ARRAY/JSONB — flexible but not query-friendly; reach for a join table
+    if you'll ever filter or count by individual entries. (5) BACKFILL — never
+    combine a NOT NULL add + data backfill in one migration on an existing
+    table.
+  files:
+    - 'db/migrate/**/*.rb'
+
+migration_backfill:
+  type: warn
+  context: >
+    This migration adds a NOT NULL constraint AND backfills data in the same
+    file. On an existing table that locks the table and can fail mid-deploy.
+    Split it: (1) add the column nullable, (2) backfill in a separate migration
+    or job, (3) add the NOT NULL constraint once data is populated. If the table
+    is brand new in this same migration, ignore this nudge.
+  files:
+    - 'db/migrate/**/*.rb'
+
+migration_missing_fk_index:
+  type: warn
+  context: >
+    This migration adds a foreign-key column or reference without an index.
+    Unindexed FKs make joins and association lookups slow and cause lock
+    contention on delete. Add the index in this same migration —
+    add_index :table, :foo_id, or add_reference ..., index: true.
+  files:
+    - 'db/migrate/**/*.rb'
+
+ruby_vs_sql:
+  type: warn
+  pattern: '\.all\.(map|select|reject|each)\b'
+  context: >
+    `.all.map` / `.all.select` / `.all.reject` / `.all.each` loads every row of
+    the table into Ruby before filtering or transforming it. Push the work into
+    SQL: use a scope, where/pluck/select(:col), or find_each for batched
+    iteration. If you genuinely need every record materialised, make that
+    explicit and ignore this nudge.
+  files:
+    - 'app/models/**/*.rb'
+    - 'app/controllers/**/*.rb'
+
+view_query_logic:
+  type: warn
+  pattern: '\b[A-Z]\w*\.(find|where|all|order|joins|pluck|count|sum)\b'
+  context: >
+    This view queries a model directly (e.g. Model.where / Model.find). Views
+    should render data the controller or a presenter already prepared — query
+    logic in templates is untestable, runs on every render, and hides N+1s.
+    Move the query into the controller, a scope, or a presenter and pass the
+    result in.
+  files:
+    - '**/*.erb'
+
+spec_let_fixture_nudge:
+  type: warn
+  once_per_session: true
+  pattern: '^\s*let!?\('
+  files:
+    - 'spec/**/*.rb'
+  context: >
+    You're adding `let` / `let!` in a spec. Pause on heavy `let` / `let!`
+    setup and consider shared test setup instead. When a `let` block builds
+    persistent, multi-record, cross-aggregate state — many associated records,
+    or any multi-model construction — pull it into shared setup that stays
+    consistent across specs: a FactoryBot factory or trait, a fixture, a
+    shared_context, or a support helper. Reserve `let` for small in-memory
+    values, per-test variation, and one-off test doubles. If reusable setup
+    like this doesn't exist yet, add it rather than repeating the construction
+    inline.

@@ -1,0 +1,35 @@
+# Advisory rules enforced by the read-rules check on
+# Bash / Grep / Glob tool calls.
+#
+# Each rule:
+#   type:              "block" (deny tool call) or "warn" (inject context)
+#   tools:             Optional array of tool names. Defaults to [Bash, Grep, Glob].
+#                      Rule is skipped when tool_name is not in this list.
+#   context:           Static message returned to Claude (may be overridden by
+#                      a detector).
+#   once_per_session:  Optional, warn-only. When true the rule fires at most
+#                      once per session (sentinel under tmp/.claude-advisory/).
+#                      Block rules ignore this flag.
+#
+# Per-rule detection logic lives in detectors/<rule_name>.rb. Without a
+# detector, the rule fires whenever the tool match passes — useful for
+# tool-wide advisories. A detector may override the context message for a
+# given fire. A detector also receives the rule's own YAML hash, so any extra
+# keys here (like `roots:` below) are configuration the detector can read.
+#
+# Rule names must be unique across read.yml AND write.yml — both scripts
+# share the same per-session sentinel namespace.
+
+broad_search_advisory:
+  type: warn
+  once_per_session: true
+  # Top-level directories the detector treats as "broad" when searched
+  # recursively or unscoped. These are Rails' source roots; swap them for your
+  # stack (e.g. src, cmd, internal, packages) and the same detector applies.
+  roots: [app, lib, spec, config]
+  context: >
+    Before broad searches across the repo, narrow your target first: (1) Check
+    db/schema.rb for table and column names to confirm what you're looking for
+    exists and how it's spelled. (2) Prefer searches scoped to specific
+    subdirectories (e.g. app/models app/services) over app/ or the repo root
+    alone.

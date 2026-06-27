@@ -1,0 +1,15 @@
+{
+  "name": "rulekit",
+  "owner": {
+    "name": "Rhys Murray"
+  },
+  "plugins": [
+    {
+      "name": "rulekit",
+      "source": "./",
+      "description": "Just-in-time coding conventions for Claude Code: path/content-matched rules that block or nudge at the moment of an edit, with pluggable detectors, per-session escape hatches, and read-side guardrails. Ships a Rails preset.",
+      "category": "workflow",
+      "tags": ["hooks", "conventions", "guardrails", "rails"]
+    }
+  ]
+}

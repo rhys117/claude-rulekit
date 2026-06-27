@@ -1,0 +1,20 @@
+{
+  "name": "rulekit",
+  "version": "0.1.0",
+  "description": "Just-in-time coding conventions for Claude Code. Path- and content-matched rules that block or nudge at the moment of an edit — with pluggable detectors, per-session escape hatches, and read-side guardrails.",
+  "author": {
+    "name": "Rhys Murray"
+  },
+  "license": "MIT",
+  "keywords": [
+    "hooks",
+    "conventions",
+    "guardrails",
+    "rules",
+    "rails",
+    "just-in-time",
+    "context-engineering"
+  ],
+  "hooks": "./hooks/hooks.json",
+  "commands": "./commands"
+}
