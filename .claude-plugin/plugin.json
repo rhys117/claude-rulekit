@@ -16,5 +16,6 @@
     "context-engineering"
   ],
   "hooks": "./hooks/hooks.json",
-  "commands": "./commands"
+  "commands": "./commands",
+  "skills": "./skills"
 }

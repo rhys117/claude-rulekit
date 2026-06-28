@@ -7,7 +7,13 @@
 #
 #   type:              "block" (deny tool call) or "warn" (inject context)
 #   tools:             Optional array of tool names. Defaults to [Bash, Grep, Glob].
-#                      Rule is skipped when tool_name is not in this list.
+#                      Add "Read" to fire when the agent opens a file. Rule is
+#                      skipped when tool_name is not in this list.
+#   files:             Optional globs (relative to project root, ** supported)
+#                      matched against the path the tool touches: the file_path
+#                      for Read, the search path for Grep/Glob. Omit to fire on
+#                      the tool match alone. Bash has no single path, so a rule
+#                      with `files` never matches a Bash call.
 #   context:           Static message returned to Claude (may be overridden by
 #                      a detector).
 #   once_per_session:  Optional, warn-only. When true the rule fires at most
@@ -40,11 +46,14 @@ require 'json'
 require 'yaml'
 require_relative '../lib/rules_runner'
 
+# Tools this hook may fire on. Rules without an explicit `tools:` default to the
+# search tools only, so firing on Read is opt-in per rule.
+READ_TOOLS = %w[Read Bash Grep Glob].freeze
 DEFAULT_TOOLS = %w[Bash Grep Glob].freeze
 
 input = JSON.parse($stdin.read)
 tool = input['tool_name']
-exit 0 unless DEFAULT_TOOLS.include?(tool)
+exit 0 unless READ_TOOLS.include?(tool)
 
 session_id = input['session_id'].to_s
 tool_input = input['tool_input'] || {}
@@ -55,6 +64,16 @@ exit 0 unless File.exist?(config_path)
 
 rules = YAML.safe_load_file(config_path) || {}
 exit 0 if rules.empty?
+
+# Path the tool touches, used for `files` globs: the file_path it reads, or the
+# path it searches. Bash has neither, so a rule with `files` never matches it.
+target_path = (tool_input['file_path'] || tool_input['path']).to_s
+relative_path = if !project_dir.empty? && target_path.start_with?("#{project_dir}/")
+                  target_path[(project_dir.length + 1)..]
+                else
+                  target_path
+end
+fnmatch_flags = File::FNM_PATHNAME | File::FNM_DOTMATCH
 
 runner = RulesRunner.from_env(script_name: 'read-rules-check', project_dir: project_dir, session_id: session_id)
 
@@ -67,6 +86,17 @@ rules.each do |name, rule|
   allowed_tools = Array(rule['tools'])
   allowed_tools = DEFAULT_TOOLS if allowed_tools.empty?
   next unless allowed_tools.include?(tool)
+
+  globs = Array(rule['files'])
+  unless globs.empty?
+    next if target_path.empty?
+
+    matched = globs.any? do |glob|
+      File.fnmatch?(glob, relative_path, fnmatch_flags) ||
+        File.fnmatch?(glob, target_path, fnmatch_flags)
+    end
+    next unless matched
+  end
 
   detector = runner.load_detector(name)
   result = detector ? detector.call(tool: tool, tool_input: tool_input, session_id: session_id, rule: rule) : true

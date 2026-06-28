@@ -12,7 +12,7 @@
         ]
       },
       {
-        "matcher": "Bash|Grep|Glob",
+        "matcher": "Read|Bash|Grep|Glob",
         "hooks": [
           {
             "type": "command",

@@ -23,7 +23,7 @@ Think of it as Hookify for power users.
 Rulekit needs **Ruby on `PATH`** (the hooks are Ruby scripts) and **`jq`** (used by the `SessionStart` cleanup hook).
 
 ```
-/plugin marketplace add https://github.com/rhys117/rulekit
+/plugin marketplace add https://github.com/rhys117/claude-rulekit
 /plugin install rulekit@rulekit
 ```
 
@@ -64,9 +64,9 @@ no_default_scope:
 | Field | Used by | Description |
 |---|---|---|
 | `type` | all | `block`, `block_once`, or `warn`. |
-| `files` | write | List of path globs (`**` supported), matched against the file being edited. |
+| `files` | write, read | Path globs (`**` supported). On write, the file being edited; on read, the path the tool touches (the `Read` file, or a `Grep`/`Glob` path). |
 | `pattern` | write | Optional Ruby regex matched against the new content. Omit to fire on the file glob alone. |
-| `tools` | read | Optional list of tool names. Defaults to `[Bash, Grep, Glob]`. |
+| `tools` | read | Optional list of tool names. Defaults to `[Bash, Grep, Glob]`; add `Read` to fire when the agent opens a file. |
 | `context` | all | The message returned to the agent. A detector may override it. |
 | `once_per_session` | warn | When `true`, the rule fires at most once per session. |
 
@@ -148,7 +148,7 @@ rulekit/
 
 ## Presets
 
-`presets/rails/` is a portable set of opinionated Rails conventions generalized from a real production app: ten write rules (no `default_scope`, the service object DDD check, the migration safety checklist, `NOT NULL` + backfill in one migration, unindexed foreign keys, `.all.map` instead of SQL, model queries in views, fat model nudges, heavy spec setup) and one read rule that narrows broad repo searches. See [`presets/rails/README.md`](presets/rails/README.md) for the full table and the opinions each rule encodes.
+`presets/rails/` is a portable set of opinionated Rails conventions generalized from a real production app: fifteen write rules (no `default_scope`, the service object DDD check, the migration safety checklist, `NOT NULL` + backfill in one migration, unindexed foreign keys, `.all.map` instead of SQL, model queries in views, fat model nudges, heavy spec setup, SQL-injection interpolation, bare `rescue`, model references in migrations, missing HTTP timeouts, and uniqueness-without-index) and one read rule that narrows broad repo searches. See [`presets/rails/README.md`](presets/rails/README.md) for the full table and the opinions each rule encodes.
 
 Presets for other stacks are welcome. A preset is just a `write.yml`, a `read.yml`, and an optional `detectors/` directory.
 

@@ -4,7 +4,10 @@
 # Each rule:
 #   type:              "block" (deny tool call) or "warn" (inject context)
 #   tools:             Optional array of tool names. Defaults to [Bash, Grep, Glob].
-#                      Rule is skipped when tool_name is not in this list.
+#                      Add "Read" to fire when the agent opens a file.
+#   files:             Optional path globs matched against the file the tool
+#                      touches (file_path for Read, search path for Grep/Glob).
+#                      Omit to fire on the tool match alone.
 #   context:           Static message returned to Claude (may be overridden by
 #                      a detector).
 #   once_per_session:  Optional, warn-only. When true the rule fires at most
@@ -33,3 +36,16 @@ broad_search_advisory:
     exists and how it's spelled. (2) Prefer searches scoped to specific
     subdirectories (e.g. app/models app/services) over app/ or the repo root
     alone.
+
+# Example: steer the agent to the new pattern the moment it opens a deprecated
+# file. Deprecations are project-specific, so this ships commented out. Point
+# the path at your own legacy code and say where the new way lives.
+#
+# deprecated_partials:
+#   type: warn
+#   tools: [Read]
+#   files: ["app/views/shared/**/*.erb"]
+#   context: >
+#     These shared partials are deprecated. New shared UI is built as
+#     ViewComponents under app/components. Prefer a component, and check
+#     app/components for one that already fits.

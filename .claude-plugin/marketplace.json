@@ -7,7 +7,7 @@
     {
       "name": "rulekit",
       "source": "./",
-      "description": "Just-in-time coding conventions for Claude Code: path/content-matched rules that block or nudge at the moment of an edit, with pluggable detectors, per-session escape hatches, and read-side guardrails. Ships a Rails preset.",
+      "description": "Just-in-time coding conventions for Claude Code: path/content-matched rules that block or nudge at the moment of an edit, with pluggable detectors, per-session escape hatches, and read-side guardrails. Ships a Rails preset, including an optional commented Sorbet inline-RBS advisory that hands off to a bundled skill.",
       "category": "workflow",
       "tags": ["hooks", "conventions", "guardrails", "rails"]
     }

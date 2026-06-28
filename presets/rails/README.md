@@ -20,6 +20,11 @@ These fire on `Edit`, `MultiEdit`, and `Write` tool calls.
 | `view_query_logic` | warn | Any ActiveRecord query call (`where`, `find`, `order`, etc.) directly in an `.erb` file | Views should render data the controller already prepared. Query logic in templates is untestable and hides N+1s. Move the query to the controller, a scope, or a presenter. |
 | `model_wrapper_delegation` | warn | Detector-backed. See below. | Heads up that a root model with existing wrapper modules is being edited. Check whether the new logic duplicates a wrapper or signals a new cohesive responsibility to extract. |
 | `spec_let_fixture_nudge` | warn | `let` or `let!` in `spec/**/*.rb` | Pause on heavy `let`/`let!` setup. Pull multi-record, cross-model construction into shared setup (a FactoryBot factory or trait, a fixture, a `shared_context`, or a support helper). Reserve `let` for small in-memory values and per-test variation. |
+| `sql_injection` | block_once | A `#{…}` interpolation inside a double-quoted string argument to `where`/`order`/`find_by_sql`/`having`/`group`/`joins`/`pluck`/`select`/`exists?` in `app/**/*.rb` or `lib/**/*.rb` | SQL-injection vector. Use bind parameters (`where("name = ?", name)`). Single-quoted strings don't interpolate, so they aren't flagged. Yields on retry for trusted constant interpolation. |
+| `bare_rescue` | warn | `rescue` with no exception class, or `rescue nil`, in `app/**/*.rb` or `lib/**/*.rb` | Bare rescue swallows every `StandardError` and hides real failures. Rescue the specific class you expect and let the rest surface. |
+| `migration_model_reference` | warn | A model-class query (`User.where`, `Model.find_each`, etc.) inside `db/migrate/**/*.rb` | Migrations load *current* model code; when the model changes the migration breaks. Use raw SQL or an inline throwaway class instead. |
+| `missing_http_timeout` | warn | Detector-backed. See below. | An HTTP client (`Net::HTTP`/`Faraday`/`HTTParty`/`RestClient`/`Typhoeus`/`Excon`) is used with no timeout in the file. Set `open_timeout` and `read_timeout` so a hung endpoint can't exhaust the thread pool. |
+| `validates_uniqueness_no_index` | warn | Detector-backed. See below. | A model validates uniqueness on a column with no backing `unique: true` index in `db/schema.rb`. The validation races under concurrency; add a DB unique index. |
 
 ---
 
@@ -35,13 +40,15 @@ These fire on `Bash`, `Grep`, and `Glob` tool calls.
 
 ## Detector-backed rules
 
-Four rules delegate their fire/no-fire decision to a Ruby detector in `detectors/`. The detector receives the file path and content (for write rules) or the tool name and input (for read rules).
+Six rules delegate their fire/no-fire decision to a Ruby detector in `detectors/`. The detector receives the file path and content (for write rules) or the tool name and input (for read rules).
 
 | Rule | Detector inspects |
 |---|---|
 | `migration_backfill` | Unions the on-disk file with the incoming edit and checks for both a `null: false` / `change_column_null` pattern and a backfill pattern (`update_all`, `find_each`, `exec_update`, etc.). Skips the warning when the migration also creates the table (no existing rows to lock). |
 | `migration_missing_fk_index` | Finds every `add_column :t, :*_id` and `add_reference`/`add_belongs_to index: false` in the full migration content. Fires only for columns that have no matching `add_index` entry. Returns the specific column names in its context override. |
 | `model_wrapper_delegation` | Checks whether a root model file (e.g. `app/models/user.rb`) has a matching subdirectory of wrapper modules (e.g. `app/models/user/`). If wrappers exist, fires and names them in the message. Skips `application_record.rb`. Uses a per-model sentinel so it fires at most once per model per session. |
+| `missing_http_timeout` | Unions the on-disk file with the incoming edit. Fires when the content references an HTTP client but no timeout token (`open_timeout`, `read_timeout`, `timeout`, `Timeout.timeout`) appears anywhere in the file — so a timeout set elsewhere in the same file silences it. A timeout configured in a separate initializer/wrapper can't be seen, so the message says to ignore it in that case. |
+| `validates_uniqueness_no_index` | Parses the uniqueness-validated columns from the model, then scans `db/schema.rb` for every column named in a `unique: true` index. Fires (naming the columns) for any validated column not covered. No table-name inflection — a same-named unique index on another table counts as cover, which under-warns rather than nags. |
 | `broad_search_advisory` | Matches broad recursive `grep -r`/`find` commands and unscoped `Grep`/`Glob` paths. The "broad" top-level directories come from the rule's `roots:` list (`app`, `lib`, `spec`, `config` here), so the same detector ports to any stack by changing that list. |
 
 ---
@@ -56,6 +63,14 @@ These rules encode specific stances:
 - **Push filtering into SQL** — the `ruby_vs_sql` rule treats `.all.map` as a smell.
 
 Delete any rule that does not fit your team. Soften `block` to `warn`, or `block_once` to `warn` with `once_per_session: true`, if you want advisories instead of stops. Rules with type `block_once` already yield on retry, so they carry a built-in escape hatch.
+
+---
+
+## Optional: Sorbet inline RBS
+
+`write.yml` ends with a commented-out `sorbet_inline_rbs_advisory` rule. It only fits a project that types Ruby with Sorbet's inline RBS comments (`--enable-experimental-rbs-comments`), and it fires on every `def`, so it ships dormant. Uncomment it to enable.
+
+When it fires, it doesn't dump the type conventions into the agent's context. It tells the agent to hand the typing to a subagent that reads the bundled `/rulekit:sorbet-inline-rbs` skill, signs the methods, and runs `srb tc` to green, so the conventions and the verify loop stay out of the main window. The detector ships ready at `detectors/sorbet_inline_rbs_advisory.rb`, and the skill is available whenever the plugin is enabled (no `/rules-init` needed).
 
 ---
 

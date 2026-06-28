@@ -49,10 +49,9 @@ service_call_idiom:
     a verb, the abstraction is probably misplaced. (3) `def self.call`
     that just forwards to `new(...).call` is pure ceremony — callers can
     write `Klass.new(args).call` directly, which keeps the keyword
-    signature in one place. Escape hatch — if `call` is required to
-    satisfy an external callable interface (framework contract, library
-    expectation, background-job interface), re-run the edit and it will go
-    through; this rule blocks once per session.
+    signature in one place. If `call` is required to satisfy an external
+    callable interface (framework contract, library expectation,
+    background-job interface), the override is legitimate.
 
 service_design_advisory:
   type: warn
@@ -157,3 +156,101 @@ spec_let_fixture_nudge:
     values, per-test variation, and one-off test doubles. If reusable setup
     like this doesn't exist yet, add it rather than repeating the construction
     inline.
+
+# ── Security ────────────────────────────────────────────────────────────────
+
+sql_injection:
+  type: block_once
+  pattern: '\b(where|having|group|order|reorder|find_by_sql|exists\?|select|joins|pluck)\(\s*"[^"]*#\{'
+  files:
+    - 'app/**/*.rb'
+    - 'lib/**/*.rb'
+  context: >
+    SQL string interpolation in a query method — `#{...}` inside a double-quoted
+    SQL fragment — is a SQL-injection vector. Use bind parameters instead:
+    where("name = ?", name) or where("name = :name", name: name). A single-quoted
+    string does not interpolate, so it is not flagged. If you are interpolating a
+    trusted, non-user value (a constant column or table name), re-issue the edit
+    to proceed.
+
+# ── Rails antipatterns ──────────────────────────────────────────────────────
+
+bare_rescue:
+  type: warn
+  pattern: 'rescue[ \t]*(=>|$)|rescue[ \t]+nil\b'
+  files:
+    - 'app/**/*.rb'
+    - 'lib/**/*.rb'
+  context: >
+    Bare rescue — `rescue` with no exception class, or `rescue nil` — swallows
+    every StandardError, including ones you did not anticipate, and hides real
+    failures (the "fire and forget" antipattern). Rescue the specific class you
+    expect (rescue Net::ReadTimeout => e) and let everything else surface. If you
+    must catch broadly, log or re-raise rather than silently discarding.
+
+migration_model_reference:
+  type: warn
+  pattern: '\b[A-Z]\w*\.(all|where|find_by|find_each|find_in_batches|find|in_batches|pluck|update_all|update|delete_all|destroy_all|count|create)\b'
+  files:
+    - 'db/migrate/**/*.rb'
+  context: >
+    This migration references a model class (e.g. User.where / Model.find_each).
+    Migrations run against a historical schema but load *current* model code — when
+    the model changes or is deleted, the migration breaks and can no longer be
+    replayed. Operate on raw tables instead: execute SQL, or define a throwaway
+    class inline (class MigrationUser < ActiveRecord::Base; self.table_name =
+    "users"; end). For large backfills, prefer a separate data migration or job.
+
+missing_http_timeout:
+  type: warn
+  pattern: 'Net::HTTP|Faraday|HTTParty|RestClient|Typhoeus|Excon'
+  files:
+    - 'app/**/*.rb'
+    - 'lib/**/*.rb'
+  context: >
+    This code calls an external HTTP service with no timeout in sight. Without one,
+    a slow or hung endpoint ties up the request (or job) until the client's default
+    — often 60s, sometimes never — cascading into thread-pool exhaustion. Set both
+    open_timeout and read_timeout on the client. If the timeout is configured
+    centrally (an initializer or a wrapper class this file can't see), ignore this
+    nudge.
+
+validates_uniqueness_no_index:
+  type: warn
+  pattern: 'uniqueness|validates_uniqueness_of'
+  files:
+    - 'app/models/**/*.rb'
+  context: >
+    This model validates uniqueness without a backing unique index. The validation
+    runs a SELECT before INSERT, so two concurrent requests can both pass it and
+    both write — a duplicate slips through. Add a database unique index
+    (add_index :table, :col, unique: true) so the constraint is enforced at the DB
+    level, not just in Ruby.
+
+# ---------------------------------------------------------------------------
+# Optional: Sorbet inline RBS. Commented out because it only makes sense in a
+# project that types Ruby with Sorbet's inline RBS comments
+# (`--enable-experimental-rbs-comments`), and it fires on EVERY `def` added in
+# app/ or lib/, which in a non-Sorbet app is constant noise pointing at tooling
+# that isn't there. Uncomment to enable. Its detector ships ready at
+# detectors/sorbet_inline_rbs_advisory.rb, and it hands off to the bundled
+# `/rulekit:sorbet-inline-rbs` skill.
+#
+# sorbet_inline_rbs_advisory:
+#   type: warn
+#   once_per_session: true
+#   context: >
+#     This Ruby change adds a method without a Sorbet inline RBS signature (or
+#     creates a file without a `# typed:` sigil). The full conventions are long,
+#     so don't pull them in here to sign it inline. Instead dispatch a subagent
+#     (the Task tool) to do the typing: have it read the /rulekit:sorbet-inline-rbs
+#     skill, add inline RBS signatures to the methods in this file, run
+#     `bundle exec srb tc` until it passes, and report back a one-line summary.
+#     That keeps the conventions and the srb tc loop out of your context. For a
+#     single trivial method it's fine to sign it inline from
+#     /rulekit:sorbet-inline-rbs instead, with no blank line between the `#:` and
+#     its `def`. If the file is intentionally untyped (generated, vendored, a
+#     spec), ignore this nudge.
+#   files:
+#     - 'app/**/*.rb'
+#     - 'lib/**/*.rb'

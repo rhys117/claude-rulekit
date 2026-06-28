@@ -31,6 +31,13 @@ mkdir -p "$SMOKE/app/models/order"
 echo "class Order < ApplicationRecord; end" > "$SMOKE/app/models/order.rb"
 echo "class Order::LineItem; end"            > "$SMOKE/app/models/order/line_item.rb"
 
+# Fixture for validates_uniqueness_no_index: schema with a unique index on
+# email but none on username.
+mkdir -p "$SMOKE/db"
+printf '%s\n' 'add_index "users", ["email"], name: "idx_users_email", unique: true' \
+             'add_index "users", ["company_id"], name: "idx_users_company"' \
+  > "$SMOKE/db/schema.rb"
+
 cleanup() { rm -rf "$SMOKE"; }
 trap cleanup EXIT
 
@@ -178,6 +185,73 @@ OUT=$(run "$W" '{"tool_name":"Edit","session_id":"'"$SID"'","tool_input":{"file_
 assert_contains "editing a model with siblings fires model_wrapper_delegation" "$OUT" "model_wrapper_delegation"
 assert_contains "detector names the sibling" "$OUT" "line_item"
 assert_exit     "model wrapper" "$EC" "0"
+
+echo
+echo "==> write.yml — security (sql_injection, block_once)"
+
+SID="w-sqli"
+P='{"tool_name":"Edit","session_id":"'"$SID"'","tool_input":{"file_path":"app/models/post.rb","new_string":"  scope :by_name, ->(q) { where(\"name = '"'"'#{q}'"'"'\") }"}}'
+OUT=$(run "$W" "$P"); EC=$?
+assert_contains "interpolated where blocks (sql_injection)" "$OUT" "sql_injection"
+assert_exit     "interpolated where" "$EC" "2"
+OUT=$(run "$W" "$P"); EC=$?
+assert_not_contains "sql_injection yields on retry (block_once)" "$OUT" "sql_injection"
+assert_exit         "interpolated where retry" "$EC" "0"
+
+SID="w-sqli-neg"
+OUT=$(run "$W" '{"tool_name":"Edit","session_id":"'"$SID"'","tool_input":{"file_path":"app/models/post.rb","new_string":"  scope :by_name, ->(q) { where(\"name = ?\", q) }"}}'); EC=$?
+assert_silent "parameterized where stays silent" "$OUT"
+
+echo
+echo "==> write.yml — bare_rescue"
+
+SID="w-rescue"
+OUT=$(run "$W" '{"tool_name":"Edit","session_id":"'"$SID"'","tool_input":{"file_path":"app/clients/sync.rb","new_string":"    do_work\n  rescue => e\n    nil\n  end"}}'); EC=$?
+assert_contains "bare rescue => fires bare_rescue" "$OUT" "bare_rescue"
+assert_exit     "bare rescue" "$EC" "0"
+
+SID="w-rescue-neg"
+OUT=$(run "$W" '{"tool_name":"Edit","session_id":"'"$SID"'","tool_input":{"file_path":"app/clients/sync.rb","new_string":"    do_work\n  rescue Net::ReadTimeout => e\n    retry\n  end"}}'); EC=$?
+assert_silent "rescue with explicit class stays silent" "$OUT"
+
+echo
+echo "==> write.yml — migration_model_reference"
+
+SID="w-migref"
+MIG='class X < ActiveRecord::Migration[8.0]\n  def up\n    User.where(active: true).find_each { |u| u.touch }\n  end\nend'
+OUT=$(run "$W" '{"tool_name":"Write","session_id":"'"$SID"'","tool_input":{"file_path":"db/migrate/20260101000010_x.rb","content":"'"$MIG"'"}}'); EC=$?
+assert_contains "model reference in migration fires migration_model_reference" "$OUT" "migration_model_reference"
+assert_exit     "migration model reference" "$EC" "0"
+
+SID="w-migref-neg"
+MIG='class X < ActiveRecord::Migration[8.0]\n  def change\n    add_column :posts, :title, :string\n  end\nend'
+OUT=$(run "$W" '{"tool_name":"Write","session_id":"'"$SID"'","tool_input":{"file_path":"db/migrate/20260101000011_x.rb","content":"'"$MIG"'"}}'); EC=$?
+assert_not_contains "plain add_column migration does not fire migration_model_reference" "$OUT" "migration_model_reference"
+
+echo
+echo "==> write.yml — missing_http_timeout (detector)"
+
+SID="w-timeout"
+OUT=$(run "$W" '{"tool_name":"Edit","session_id":"'"$SID"'","tool_input":{"file_path":"app/clients/payment_client.rb","new_string":"  def fetch\n    Net::HTTP.get(URI(url))\n  end"}}'); EC=$?
+assert_contains "HTTP call without timeout fires missing_http_timeout" "$OUT" "missing_http_timeout"
+assert_exit     "missing http timeout" "$EC" "0"
+
+SID="w-timeout-neg"
+OUT=$(run "$W" '{"tool_name":"Edit","session_id":"'"$SID"'","tool_input":{"file_path":"app/clients/payment_client.rb","new_string":"  def fetch\n    Net::HTTP.start(host, port, open_timeout: 5, read_timeout: 5)\n  end"}}'); EC=$?
+assert_silent "HTTP call with timeout stays silent" "$OUT"
+
+echo
+echo "==> write.yml — validates_uniqueness_no_index (detector, uses schema fixture)"
+
+SID="w-uniq"
+OUT=$(run "$W" '{"tool_name":"Edit","session_id":"'"$SID"'","tool_input":{"file_path":"'"$SMOKE"'/app/models/account.rb","new_string":"  validates :username, uniqueness: true"}}'); EC=$?
+assert_contains "uniqueness without index fires validates_uniqueness_no_index" "$OUT" "validates_uniqueness_no_index"
+assert_contains "detector names the column" "$OUT" "username"
+assert_exit     "uniqueness without index" "$EC" "0"
+
+SID="w-uniq-neg"
+OUT=$(run "$W" '{"tool_name":"Edit","session_id":"'"$SID"'","tool_input":{"file_path":"'"$SMOKE"'/app/models/account.rb","new_string":"  validates :email, uniqueness: true"}}'); EC=$?
+assert_silent "uniqueness on an indexed column stays silent" "$OUT"
 
 echo
 echo "==================================="

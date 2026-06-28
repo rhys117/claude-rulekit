@@ -7,6 +7,11 @@ require 'json'
 # (file globs / content patterns for write; tool name for read), then call
 # `record` once per fired rule and `emit!` once at the end.
 class RulesRunner
+  # Appended to every block_once denial so the agent knows the block is soft:
+  # re-issuing the same edit in this session will be allowed through. Authors
+  # write the convention; the engine supplies the escape hatch.
+  BLOCK_ONCE_AFFORDANCE = 'This rule blocks once per session; make the same edit again and it will go through.'
+
   # Resolves the rules directory. Defaults to <project>/.claude/rules, but
   # CLAUDE_RULES_DIR overrides it (useful for tests or non-standard layouts).
   def self.rules_dir(project_dir)
@@ -70,10 +75,11 @@ class RulesRunner
       @sentinels << sentinel
     end
 
-    message = "[#{name}] #{context}"
+    text = "[#{name}] #{context}"
     case type
-    when 'block', 'block_once' then @blocks << message
-    else @warns << message
+    when 'block_once' then @blocks << "#{text} #{BLOCK_ONCE_AFFORDANCE}"
+    when 'block'      then @blocks << text
+    else @warns << text
     end
   end
 
