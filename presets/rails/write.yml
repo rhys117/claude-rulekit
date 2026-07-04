@@ -228,29 +228,29 @@ validates_uniqueness_no_index:
     level, not just in Ruby.
 
 # ---------------------------------------------------------------------------
-# Optional: Sorbet inline RBS. Commented out because it only makes sense in a
-# project that types Ruby with Sorbet's inline RBS comments
-# (`--enable-experimental-rbs-comments`), and it fires on EVERY `def` added in
-# app/ or lib/, which in a non-Sorbet app is constant noise pointing at tooling
-# that isn't there. Uncomment to enable. Its detector ships ready at
+# Sorbet inline RBS. Only makes sense in a project that types Ruby with Sorbet's
+# inline RBS comments (`--enable-experimental-rbs-comments`): it fires on EVERY
+# `def` added in app/ or lib/ without a `#:` signature, so in a non-Sorbet app it
+# is constant noise pointing at tooling that isn't there. Its detector ships at
 # detectors/sorbet_inline_rbs_advisory.rb, and it hands off to the bundled
-# `/rulekit:sorbet-inline-rbs` skill.
-#
-# sorbet_inline_rbs_advisory:
-#   type: warn
-#   once_per_session: true
-#   context: >
-#     This Ruby change adds a method without a Sorbet inline RBS signature (or
-#     creates a file without a `# typed:` sigil). The full conventions are long,
-#     so don't pull them in here to sign it inline. Instead dispatch a subagent
-#     (the Task tool) to do the typing: have it read the /rulekit:sorbet-inline-rbs
-#     skill, add inline RBS signatures to the methods in this file, run
-#     `bundle exec srb tc` until it passes, and report back a one-line summary.
-#     That keeps the conventions and the srb tc loop out of your context. For a
-#     single trivial method it's fine to sign it inline from
-#     /rulekit:sorbet-inline-rbs instead, with no blank line between the `#:` and
-#     its `def`. If the file is intentionally untyped (generated, vendored, a
-#     spec), ignore this nudge.
-#   files:
-#     - 'app/**/*.rb'
-#     - 'lib/**/*.rb'
+# `/rulekit:sorbet-inline-rbs` skill. Comment this rule out if your project isn't
+# on Sorbet.
+
+sorbet_inline_rbs_advisory:
+  type: warn
+  once_per_session: true
+  context: >
+    This Ruby change adds a method without a Sorbet inline RBS signature (or
+    creates a file without a `# typed:` sigil). The full conventions are long,
+    so don't pull them in here to sign it inline. Instead dispatch a subagent
+    (the Task tool) to do the typing: have it read the /rulekit:sorbet-inline-rbs
+    skill, add inline RBS signatures to the methods in this file, run
+    `bundle exec srb tc` until it passes, and report back a one-line summary.
+    That keeps the conventions and the srb tc loop out of your context. For a
+    single trivial method it's fine to sign it inline from
+    /rulekit:sorbet-inline-rbs instead, with no blank line between the `#:` and
+    its `def`. If the file is intentionally untyped (generated, vendored, a
+    spec), ignore this nudge.
+  files:
+    - 'app/**/*.rb'
+    - 'lib/**/*.rb'

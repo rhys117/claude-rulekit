@@ -105,7 +105,7 @@ assert_exit     "default_scope" "$EC" "2"
 
 SID="w-defscope-neg"
 OUT=$(run "$W" '{"tool_name":"Edit","session_id":"'"$SID"'","tool_input":{"file_path":"app/models/post.rb","new_string":"class Post\nend"}}'); EC=$?
-assert_silent "plain model edit silent" "$OUT"
+assert_not_contains "plain model edit does not fire no_default_scope" "$OUT" "no_default_scope"
 
 SID="w-rubysql"
 OUT=$(run "$W" '{"tool_name":"Edit","session_id":"'"$SID"'","tool_input":{"file_path":"app/models/post.rb","new_string":"  names = Comment.all.map(&:name)"}}'); EC=$?
@@ -200,7 +200,7 @@ assert_exit         "interpolated where retry" "$EC" "0"
 
 SID="w-sqli-neg"
 OUT=$(run "$W" '{"tool_name":"Edit","session_id":"'"$SID"'","tool_input":{"file_path":"app/models/post.rb","new_string":"  scope :by_name, ->(q) { where(\"name = ?\", q) }"}}'); EC=$?
-assert_silent "parameterized where stays silent" "$OUT"
+assert_not_contains "parameterized where does not fire sql_injection" "$OUT" "sql_injection"
 
 echo
 echo "==> write.yml — bare_rescue"
@@ -212,7 +212,7 @@ assert_exit     "bare rescue" "$EC" "0"
 
 SID="w-rescue-neg"
 OUT=$(run "$W" '{"tool_name":"Edit","session_id":"'"$SID"'","tool_input":{"file_path":"app/clients/sync.rb","new_string":"    do_work\n  rescue Net::ReadTimeout => e\n    retry\n  end"}}'); EC=$?
-assert_silent "rescue with explicit class stays silent" "$OUT"
+assert_not_contains "explicit-class rescue does not fire bare_rescue" "$OUT" "bare_rescue"
 
 echo
 echo "==> write.yml — migration_model_reference"
@@ -238,7 +238,7 @@ assert_exit     "missing http timeout" "$EC" "0"
 
 SID="w-timeout-neg"
 OUT=$(run "$W" '{"tool_name":"Edit","session_id":"'"$SID"'","tool_input":{"file_path":"app/clients/payment_client.rb","new_string":"  def fetch\n    Net::HTTP.start(host, port, open_timeout: 5, read_timeout: 5)\n  end"}}'); EC=$?
-assert_silent "HTTP call with timeout stays silent" "$OUT"
+assert_not_contains "HTTP call with timeout does not fire missing_http_timeout" "$OUT" "missing_http_timeout"
 
 echo
 echo "==> write.yml — validates_uniqueness_no_index (detector, uses schema fixture)"
@@ -251,7 +251,19 @@ assert_exit     "uniqueness without index" "$EC" "0"
 
 SID="w-uniq-neg"
 OUT=$(run "$W" '{"tool_name":"Edit","session_id":"'"$SID"'","tool_input":{"file_path":"'"$SMOKE"'/app/models/account.rb","new_string":"  validates :email, uniqueness: true"}}'); EC=$?
-assert_silent "uniqueness on an indexed column stays silent" "$OUT"
+assert_not_contains "uniqueness on indexed column does not fire validates_uniqueness_no_index" "$OUT" "validates_uniqueness_no_index"
+
+echo
+echo "==> write.yml — sorbet_inline_rbs_advisory (detector)"
+
+SID="w-sorbet"
+OUT=$(run "$W" '{"tool_name":"Edit","session_id":"'"$SID"'","tool_input":{"file_path":"app/jobs/cleanup_job.rb","new_string":"  def perform\n    1\n  end"}}'); EC=$?
+assert_contains "unsigned def fires sorbet_inline_rbs_advisory" "$OUT" "sorbet_inline_rbs_advisory"
+assert_exit     "unsigned def" "$EC" "0"
+
+SID="w-sorbet-neg"
+OUT=$(run "$W" '{"tool_name":"Edit","session_id":"'"$SID"'","tool_input":{"file_path":"app/jobs/cleanup_job.rb","new_string":"# typed: true\n  #: -> Integer\n  def perform\n    1\n  end"}}'); EC=$?
+assert_silent "signed def with typed sigil stays silent" "$OUT"
 
 echo
 echo "==================================="
