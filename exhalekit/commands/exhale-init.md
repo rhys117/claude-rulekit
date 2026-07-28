@@ -14,9 +14,13 @@ Steps:
    `Gemfile`, say so and stop — `diff-quality` shells out to `bundle exec rubycritic`
    and is useless without Bundler.
 
-2. Work out the base branch. Use `$1` if given; otherwise read the repo's default
-   with `git symbolic-ref --short refs/remotes/origin/HEAD 2>/dev/null` and fall back
-   to `main`. Tell the user which one you settled on.
+2. Work out the base branch. Use `$1` if given; otherwise read the repo's default:
+   ```
+   git symbolic-ref --short refs/remotes/origin/HEAD 2>/dev/null | sed 's|^origin/||'
+   ```
+   Note the `sed` — that command prints `origin/main`, and you want the local branch
+   name. Fall back to `main` if it prints nothing. Tell the user which one you
+   settled on.
 
 3. Install the script, without clobbering a local version:
    ```
