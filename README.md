@@ -29,6 +29,16 @@ Rulekit needs **Ruby on `PATH`** (the hooks are Ruby scripts) and **`jq`** (used
 
 The plugin manifest is at `.claude-plugin/plugin.json`; the marketplace metadata at `.claude-plugin/marketplace.json`. The hooks no-op silently in any project that has no `.claude/rules/`, so enabling rulekit globally is safe.
 
+## Also in this marketplace: exhalekit
+
+Rulekit guards the inhale — it keeps conventions in view at the moment the agent writes code. [**exhalekit**](exhalekit/README.md) guards the exhale: a `PostToolUse` hook that fires after every non-refactor commit and makes the agent review what it just built for duplication and design drift, backed by a diff-scoped rubycritic run so the review has evidence behind it.
+
+```
+/plugin install exhalekit@rulekit
+```
+
+The two are independent — install either, or both.
+
 ## Quick start
 
 ```

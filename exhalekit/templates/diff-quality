@@ -1,0 +1,69 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+NO_BROWSER=false
+POSITIONAL=()
+for arg in "$@"; do
+  case "$arg" in
+    --no-browser) NO_BROWSER=true ;;
+    *) POSITIONAL+=("$arg") ;;
+  esac
+done
+
+BASE_BRANCH="${POSITIONAL[0]:-main}"
+CHANGED_APP_FILES=$(git diff --name-only "$BASE_BRANCH" --diff-filter=d -- '*.rb' | grep -vE '^(spec/|db/schema\.rb$|config/routes\.rb$)' || true)
+CHANGED_SPEC_FILES=$(git diff --name-only "$BASE_BRANCH" --diff-filter=d -- 'spec/**/*.rb' || true)
+
+if [ -z "$CHANGED_APP_FILES" ] && [ -z "$CHANGED_SPEC_FILES" ]; then
+  echo "No Ruby files changed against $BASE_BRANCH"
+  exit 0
+fi
+
+find_related_specs() {
+  local file="$1"
+  local base
+
+  base="${file#app/}"
+  base="${base%.rb}"
+
+  [ -f "spec/${base}_spec.rb" ] && echo "spec/${base}_spec.rb" || true
+
+  if [[ "$file" == app/controllers/* ]]; then
+    local resource="${base#controllers/}"
+    resource="${resource%_controller}"
+
+    [ -f "spec/requests/${resource}_request_spec.rb" ] && echo "spec/requests/${resource}_request_spec.rb" || true
+    [ -f "spec/requests/${resource}_spec.rb" ] && echo "spec/requests/${resource}_spec.rb" || true
+  fi
+}
+
+RELATED_SPECS=""
+if [ -n "$CHANGED_APP_FILES" ]; then
+  while IFS= read -r file || [ -n "$file" ]; do
+    RELATED_SPECS+="$(find_related_specs "$file")"
+    RELATED_SPECS+=$'\n'
+  done <<< "$CHANGED_APP_FILES"
+fi
+
+ALL_SPECS=$(printf '%s\n%s' "$CHANGED_SPEC_FILES" "$RELATED_SPECS" | sort -u | grep -v '^$' || true)
+
+echo "=== Changed files (vs $BASE_BRANCH) ==="
+echo "$CHANGED_APP_FILES" | sort | grep -v '^$' || true
+echo ""
+
+if [ -n "$ALL_SPECS" ]; then
+  echo "=== Spec files to run ==="
+  echo "$ALL_SPECS"
+  echo ""
+fi
+
+if [ -n "$CHANGED_APP_FILES" ]; then
+  echo "=== RubyCritic (diff only) ==="
+  # shellcheck disable=SC2086
+  if [ "$NO_BROWSER" = true ]; then
+    bundle exec rubycritic $CHANGED_APP_FILES --no-browser --format console
+  else
+    bundle exec rubycritic $CHANGED_APP_FILES --format html --format console
+  fi
+  echo ""
+fi
