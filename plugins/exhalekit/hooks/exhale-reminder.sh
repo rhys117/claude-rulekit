@@ -16,7 +16,7 @@ fi
 PROJECT_DIR="${CLAUDE_PROJECT_DIR:-$(pwd)}"
 
 if [ -x "$PROJECT_DIR/bin/diff-quality" ]; then
-  EVIDENCE="Run \`bin/diff-quality --no-browser\` to check for rubycritic regressions and run related specs against the base branch. For a deeper design review (higher token cost), the user can run /simplify-with-analysis explicitly."
+  EVIDENCE="Run \`bin/diff-quality --no-browser --no-tests\` to check for rubycritic regressions against the base branch. Tests are skipped because they already ran before the commit — /simplify-with-analysis is the deeper pass that includes them, and the user can run it explicitly."
 else
   EVIDENCE="This project has no \`bin/diff-quality\` yet — the user can run /exhale-init to install it, which makes the next exhale evidence-backed rather than from memory."
 fi

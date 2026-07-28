@@ -6,6 +6,13 @@ POSITIONAL=()
 for arg in "$@"; do
   case "$arg" in
     --no-browser) NO_BROWSER=true ;;
+    # Accepted but unused: this template never runs specs. Keeps the exhale
+    # hook's single recommended command valid in projects that extend it to.
+    --no-tests) ;;
+    -*)
+      echo "unknown option: $arg" >&2
+      exit 1
+      ;;
     *) POSITIONAL+=("$arg") ;;
   esac
 done
