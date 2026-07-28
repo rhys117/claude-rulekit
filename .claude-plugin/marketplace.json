@@ -7,17 +7,27 @@
   "plugins": [
     {
       "name": "rulekit",
-      "source": "./",
+      "source": "./plugins/rulekit",
       "description": "Just-in-time coding conventions for Claude Code: path/content-matched rules that block or nudge at the moment of an edit, with pluggable detectors, per-session escape hatches, and read-side guardrails. Ships a Rails preset, including an optional commented Sorbet inline-RBS advisory that hands off to a bundled skill.",
       "category": "workflow",
-      "tags": ["hooks", "conventions", "guardrails", "rails"]
+      "tags": [
+        "hooks",
+        "conventions",
+        "guardrails",
+        "rails"
+      ]
     },
     {
       "name": "exhalekit",
-      "source": "./exhalekit",
+      "source": "./plugins/exhalekit",
       "description": "The exhale half of the inhale/exhale rhythm. A PostToolUse hook nudges for a simplicity and duplication review after every non-refactor commit, /exhale-init installs a diff-scoped rubycritic runner so that review has evidence behind it, and /simplify-with-analysis runs the deeper regression pass on demand.",
       "category": "workflow",
-      "tags": ["hooks", "refactoring", "code-quality", "rails"]
+      "tags": [
+        "hooks",
+        "refactoring",
+        "code-quality",
+        "rails"
+      ]
     }
   ]
 }

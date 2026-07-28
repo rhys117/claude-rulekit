@@ -27,11 +27,11 @@ Rulekit needs **Ruby on `PATH`** (the hooks are Ruby scripts) and **`jq`** (used
 /plugin install rulekit@rulekit
 ```
 
-The plugin manifest is at `.claude-plugin/plugin.json`; the marketplace metadata at `.claude-plugin/marketplace.json`. The hooks no-op silently in any project that has no `.claude/rules/`, so enabling rulekit globally is safe.
+Rulekit's manifest is at `plugins/rulekit/.claude-plugin/plugin.json`; the marketplace metadata for this repo at `.claude-plugin/marketplace.json`. The hooks no-op silently in any project that has no `.claude/rules/`, so enabling rulekit globally is safe.
 
 ## Also in this marketplace: exhalekit
 
-Rulekit guards the inhale — it keeps conventions in view at the moment the agent writes code. [**exhalekit**](exhalekit/README.md) guards the exhale: a `PostToolUse` hook that fires after every non-refactor commit and makes the agent review what it just built for duplication and design drift, backed by a diff-scoped rubycritic run so the review has evidence behind it.
+Rulekit guards the inhale — it keeps conventions in view at the moment the agent writes code. [**exhalekit**](plugins/exhalekit/README.md) guards the exhale: a `PostToolUse` hook that fires after every non-refactor commit and makes the agent review what it just built for duplication and design drift, backed by a diff-scoped rubycritic run so the review has evidence behind it.
 
 ```
 /plugin install exhalekit@rulekit
@@ -46,7 +46,7 @@ The two are independent — install either, or both. Exhalekit needs **`jq`**; i
 /rules-test
 ```
 
-`/rules-init rails` copies the bundled Rails preset from `presets/rails/` into your project's `.claude/rules/`. `/rules-test` feeds synthetic tool calls through the hooks to confirm patterns compile and detectors load.
+`/rules-init rails` copies the bundled Rails preset from `plugins/rulekit/presets/rails/` into your project's `.claude/rules/`. `/rules-test` feeds synthetic tool calls through the hooks to confirm patterns compile and detectors load.
 
 ## How rules work
 
@@ -131,65 +131,71 @@ Detectors being Ruby is the point. A detector runs in the repo and can read the 
 
 ## Repo layout
 
-This repo is a marketplace hosting two plugins. `rulekit` lives at the root; `exhalekit` lives in its own subdirectory. The standard `hooks/`, `commands/`, and `skills/` directories are discovered automatically — a plugin manifest should **not** name them, or the loader rejects the duplicate registration.
+This repo is a marketplace, not a plugin. The root holds only marketplace metadata and docs; every plugin lives under `plugins/<name>/`, matching the convention Anthropic's own marketplace uses.
+
+Inside a plugin, the `hooks/`, `commands/`, and `skills/` directories are discovered automatically. A plugin manifest must **not** name them — doing so registers them twice and the loader rejects the plugin outright.
 
 ```
 claude-rulekit/
 ├── .claude-plugin/
-│   ├── marketplace.json                  # lists both plugins
-│   └── plugin.json                       # rulekit's manifest
-│
-├── hooks/
-│   └── hooks.json                        # PreToolUse (write + read), SessionStart
-├── bin/
-│   ├── write-rules-check.rb              # Edit/MultiEdit/Write engine
-│   ├── read-rules-check.rb               # Bash/Grep/Glob engine
-│   └── clear-advisory-sentinels.sh       # SessionStart sentinel cleanup
-├── lib/
-│   └── rules_runner.rb                   # shared matching, sentinels, output
-├── commands/
-│   ├── rules-init.md                     # /rules-init <preset>
-│   └── rules-test.md                     # /rules-test
-├── skills/
-│   └── sorbet-inline-rbs/
-│       └── SKILL.md                      # invoked by the dormant Sorbet rule
-├── presets/
-│   └── rails/                            # copied in by /rules-init rails
-│       ├── write.yml                     # 15 rules
-│       ├── read.yml                      # 1 rule
-│       ├── detectors/
-│       │   ├── broad_search_advisory.rb
-│       │   ├── migration_backfill.rb
-│       │   ├── migration_missing_fk_index.rb
-│       │   ├── missing_http_timeout.rb
-│       │   ├── model_wrapper_delegation.rb
-│       │   ├── sorbet_inline_rbs_advisory.rb   # ready, rule ships commented out
-│       │   └── validates_uniqueness_no_index.rb
-│       ├── test.sh                       # asserts every rule fires/stays silent
-│       └── README.md                     # per-rule table and the opinions encoded
-│
-├── exhalekit/                            # second plugin — see its own README
-│   ├── .claude-plugin/
-│   │   └── plugin.json
-│   ├── hooks/
-│   │   ├── hooks.json                    # PostToolUse on Bash
-│   │   └── exhale-reminder.sh            # fires after a non-refactor commit
-│   ├── commands/
-│   │   ├── exhale-init.md                # /exhale-init [base-branch]
-│   │   └── simplify-with-analysis.md     # /simplify-with-analysis [base-branch]
-│   ├── templates/
-│   │   └── diff-quality                  # installed into your repo as bin/diff-quality
-│   └── README.md
-│
+│   └── marketplace.json                      # lists both plugins and their paths
 ├── LICENSE
-└── README.md
+├── README.md                                 # you are here
+│
+└── plugins/
+    ├── rulekit/
+    │   ├── .claude-plugin/
+    │   │   └── plugin.json                   # name, version, keywords only
+    │   ├── hooks/
+    │   │   └── hooks.json                    # PreToolUse (write + read), SessionStart
+    │   ├── bin/
+    │   │   ├── write-rules-check.rb          # Edit/MultiEdit/Write engine
+    │   │   ├── read-rules-check.rb           # Bash/Grep/Glob engine
+    │   │   └── clear-advisory-sentinels.sh   # SessionStart sentinel cleanup
+    │   ├── lib/
+    │   │   └── rules_runner.rb               # shared matching, sentinels, output
+    │   ├── commands/
+    │   │   ├── rules-init.md                 # /rules-init <preset>
+    │   │   └── rules-test.md                 # /rules-test
+    │   ├── skills/
+    │   │   └── sorbet-inline-rbs/
+    │   │       └── SKILL.md                  # invoked by the dormant Sorbet rule
+    │   └── presets/
+    │       └── rails/                        # copied in by /rules-init rails
+    │           ├── write.yml                 # 15 rules
+    │           ├── read.yml                  # 1 rule
+    │           ├── detectors/
+    │           │   ├── broad_search_advisory.rb
+    │           │   ├── migration_backfill.rb
+    │           │   ├── migration_missing_fk_index.rb
+    │           │   ├── missing_http_timeout.rb
+    │           │   ├── model_wrapper_delegation.rb
+    │           │   ├── sorbet_inline_rbs_advisory.rb   # ready, rule ships commented out
+    │           │   └── validates_uniqueness_no_index.rb
+    │           ├── test.sh                   # asserts every rule fires/stays silent
+    │           └── README.md                 # per-rule table and the opinions encoded
+    │
+    └── exhalekit/                            # see its own README for detail
+        ├── .claude-plugin/
+        │   └── plugin.json
+        ├── hooks/
+        │   ├── hooks.json                    # PostToolUse on Bash
+        │   └── exhale-reminder.sh            # fires after a non-refactor commit
+        ├── commands/
+        │   ├── exhale-init.md                # /exhale-init [base-branch]
+        │   └── simplify-with-analysis.md     # /simplify-with-analysis [base-branch]
+        ├── templates/
+        │   └── diff-quality                  # installed into your repo as bin/diff-quality
+        └── README.md
 ```
 
-Only `presets/` is copied into your project. Everything else stays in the plugin and runs from there.
+Only `presets/` is ever copied into your project. Everything else stays in the plugin and runs from there via `${CLAUDE_PLUGIN_ROOT}`, so plugins can be relocated without touching a single hook or command path.
+
+Adding a third plugin means a new directory under `plugins/` and one more entry in `marketplace.json`. Nothing at the root changes.
 
 ## Presets
 
-`presets/rails/` is a portable set of opinionated Rails conventions generalized from a real production app: fifteen write rules (no `default_scope`, the service object DDD check, the migration safety checklist, `NOT NULL` + backfill in one migration, unindexed foreign keys, `.all.map` instead of SQL, model queries in views, fat model nudges, heavy spec setup, SQL-injection interpolation, bare `rescue`, model references in migrations, missing HTTP timeouts, and uniqueness-without-index) and one read rule that narrows broad repo searches. See [`presets/rails/README.md`](presets/rails/README.md) for the full table and the opinions each rule encodes.
+`plugins/rulekit/presets/rails/` is a portable set of opinionated Rails conventions generalized from a real production app: fifteen write rules (no `default_scope`, the service object DDD check, the migration safety checklist, `NOT NULL` + backfill in one migration, unindexed foreign keys, `.all.map` instead of SQL, model queries in views, fat model nudges, heavy spec setup, SQL-injection interpolation, bare `rescue`, model references in migrations, missing HTTP timeouts, and uniqueness-without-index) and one read rule that narrows broad repo searches. See [`plugins/rulekit/presets/rails/README.md`](plugins/rulekit/presets/rails/README.md) for the full table and the opinions each rule encodes.
 
 Presets for other stacks are welcome. A preset is just a `write.yml`, a `read.yml`, and an optional `detectors/` directory.
 

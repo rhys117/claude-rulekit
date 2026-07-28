@@ -15,10 +15,10 @@
 
 set -uo pipefail
 
-REPO="$(cd "$(dirname "$0")/../.." && pwd)"
-PRESET="$REPO/presets/rails"
-W="$REPO/bin/write-rules-check.rb"
-R="$REPO/bin/read-rules-check.rb"
+PLUGIN_ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
+PRESET="$PLUGIN_ROOT/presets/rails"
+W="$PLUGIN_ROOT/bin/write-rules-check.rb"
+R="$PLUGIN_ROOT/bin/read-rules-check.rb"
 
 command -v ruby >/dev/null || { echo "ruby not found on PATH"; exit 1; }
 
