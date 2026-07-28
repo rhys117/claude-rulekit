@@ -37,7 +37,7 @@ Rulekit guards the inhale — it keeps conventions in view at the moment the age
 /plugin install exhalekit@rulekit
 ```
 
-The two are independent — install either, or both.
+The two are independent — install either, or both. Exhalekit needs **`jq`**; its `/exhale-init` additionally assumes a Ruby project with Bundler, since the `diff-quality` script it installs shells out to `bundle exec rubycritic`. The hook itself is language agnostic and degrades to a plain reminder where that script is absent.
 
 ## Quick start
 
@@ -131,30 +131,61 @@ Detectors being Ruby is the point. A detector runs in the repo and can read the 
 
 ## Repo layout
 
+This repo is a marketplace hosting two plugins. `rulekit` lives at the root; `exhalekit` lives in its own subdirectory. The standard `hooks/`, `commands/`, and `skills/` directories are discovered automatically — a plugin manifest should **not** name them, or the loader rejects the duplicate registration.
+
 ```
-rulekit/
+claude-rulekit/
 ├── .claude-plugin/
-│   ├── plugin.json            # plugin manifest
-│   └── marketplace.json       # marketplace listing
+│   ├── marketplace.json                  # lists both plugins
+│   └── plugin.json                       # rulekit's manifest
+│
 ├── hooks/
-│   └── hooks.json             # PreToolUse (write + read) and SessionStart
+│   └── hooks.json                        # PreToolUse (write + read), SessionStart
 ├── bin/
-│   ├── write-rules-check.rb   # Edit/MultiEdit/Write engine
-│   ├── read-rules-check.rb    # Bash/Grep/Glob engine
-│   └── clear-advisory-sentinels.sh  # SessionStart sentinel cleanup
+│   ├── write-rules-check.rb              # Edit/MultiEdit/Write engine
+│   ├── read-rules-check.rb               # Bash/Grep/Glob engine
+│   └── clear-advisory-sentinels.sh       # SessionStart sentinel cleanup
 ├── lib/
-│   └── rules_runner.rb        # shared matching, sentinels, output
+│   └── rules_runner.rb                   # shared matching, sentinels, output
 ├── commands/
-│   ├── rules-init.md          # /rules-init <preset>
-│   └── rules-test.md          # /rules-test
-└── presets/
-    └── rails/                 # copy in with /rules-init rails
-        ├── write.yml
-        ├── read.yml
-        ├── detectors/
-        ├── test.sh            # asserts every rule fires/stays silent
-        └── README.md
+│   ├── rules-init.md                     # /rules-init <preset>
+│   └── rules-test.md                     # /rules-test
+├── skills/
+│   └── sorbet-inline-rbs/
+│       └── SKILL.md                      # invoked by the dormant Sorbet rule
+├── presets/
+│   └── rails/                            # copied in by /rules-init rails
+│       ├── write.yml                     # 15 rules
+│       ├── read.yml                      # 1 rule
+│       ├── detectors/
+│       │   ├── broad_search_advisory.rb
+│       │   ├── migration_backfill.rb
+│       │   ├── migration_missing_fk_index.rb
+│       │   ├── missing_http_timeout.rb
+│       │   ├── model_wrapper_delegation.rb
+│       │   ├── sorbet_inline_rbs_advisory.rb   # ready, rule ships commented out
+│       │   └── validates_uniqueness_no_index.rb
+│       ├── test.sh                       # asserts every rule fires/stays silent
+│       └── README.md                     # per-rule table and the opinions encoded
+│
+├── exhalekit/                            # second plugin — see its own README
+│   ├── .claude-plugin/
+│   │   └── plugin.json
+│   ├── hooks/
+│   │   ├── hooks.json                    # PostToolUse on Bash
+│   │   └── exhale-reminder.sh            # fires after a non-refactor commit
+│   ├── commands/
+│   │   ├── exhale-init.md                # /exhale-init [base-branch]
+│   │   └── simplify-with-analysis.md     # /simplify-with-analysis [base-branch]
+│   ├── templates/
+│   │   └── diff-quality                  # installed into your repo as bin/diff-quality
+│   └── README.md
+│
+├── LICENSE
+└── README.md
 ```
+
+Only `presets/` is copied into your project. Everything else stays in the plugin and runs from there.
 
 ## Presets
 
