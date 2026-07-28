@@ -1,6 +1,6 @@
 {
   "name": "exhalekit",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "The exhale half of the inhale/exhale rhythm. After every feature commit, a hook reminds the agent to review for duplication and design quality — backed by a diff-scoped rubycritic run so the review has evidence, not vibes.",
   "author": {
     "name": "Rhys Murray"
