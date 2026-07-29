@@ -84,34 +84,24 @@ the reminder without the evidence.
 ## Opting out
 
 Enabling the plugin in a shared project `.claude/settings.json` opts in the whole
-team. Two ways for one developer to back out, both in files they own:
-
-**Silence the nudge, keep the commands** — set the env var in your own settings
-(`~/.claude/settings.json`, or the gitignored `.claude/settings.local.json`):
-
-```json
-{ "env": { "EXHALEKIT_DISABLED": "1" } }
-```
-
-The hook exits before doing any work. `/exhale-init` and
-`/simplify-with-analysis` still work when you want them.
-
-**Drop the plugin entirely** — local settings override project settings:
+team. To back out for yourself, disable it in the gitignored
+`.claude/settings.local.json` — local settings override project settings:
 
 ```json
 { "enabledPlugins": { "exhalekit@rulekit": false } }
 ```
 
-This also removes both commands. Claude Code has no way to disable one plugin's
-hooks while keeping the plugin, which is why the env var exists.
+That removes the hook and both commands together. Claude Code has no way to disable
+one plugin's hooks while keeping the plugin, so this is all-or-nothing by design —
+one switch, in a file you own, rather than a second mechanism to remember.
 
 ---
 
 ## Opinions you may not share
 
 - **The exhale is not optional.** The hook fires on every feature commit, not on
-  request. If you disagree, opt out per developer rather than unenrolling the team
-  — see [Opting out](#opting-out).
+  request. There's no dial between "on" and "off" — if you disagree, turn the plugin
+  off for yourself (see [Opting out](#opting-out)).
   Where the plugin is enabled in a shared project `settings.json`, a developer who
   doesn't want the nudge can opt out for themselves with `EXHALEKIT_DISABLED=1`
   (see [Opting out](#opting-out)) rather than unenrolling the team.
