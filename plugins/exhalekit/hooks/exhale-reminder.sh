@@ -1,6 +1,14 @@
 #!/bin/bash
 # exhale-reminder.sh - Remind to review for simplicity after committing
 
+# Opt out per developer without touching a shared settings.json:
+#   "env": { "EXHALEKIT_DISABLED": "1" }  in ~/.claude/settings.json
+#                                         or .claude/settings.local.json
+case "${EXHALEKIT_DISABLED:-}" in
+  "" | 0 | false | no) ;;
+  *) exit 0 ;;
+esac
+
 command -v jq >/dev/null 2>&1 || exit 0
 
 INPUT=$(cat)
