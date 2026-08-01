@@ -1,0 +1,94 @@
+#!/usr/bin/env bash
+# diff-quality - RubyCritic scoped to the diff against the base branch, plus the
+# spec files related to what changed. Installed by exhalekit's /exhale-init.
+#
+# Usage: diff-quality [base-branch] [--last-commit] [--no-browser]
+#   --last-commit  scope to the most recent commit instead of a base branch
+set -euo pipefail
+
+NO_BROWSER=false
+LAST_COMMIT=false
+POSITIONAL=()
+for arg in "$@"; do
+  case "$arg" in
+    --no-browser) NO_BROWSER=true ;;
+    --last-commit) LAST_COMMIT=true ;;
+    *) POSITIONAL+=("$arg") ;;
+  esac
+done
+
+default_base() {
+  for branch in main master; do
+    if git show-ref --verify --quiet "refs/heads/$branch"; then
+      echo "$branch"
+      return
+    fi
+  done
+  echo "main"
+}
+
+if [ "$LAST_COMMIT" = true ]; then
+  DIFF_BASE=$(git rev-parse --verify --quiet HEAD~1 || git hash-object -t tree /dev/null)
+  DIFF_LABEL="last commit"
+else
+  DIFF_BASE="${POSITIONAL[0]:-$(default_base)}"
+  DIFF_LABEL="$DIFF_BASE"
+fi
+
+CHANGED_APP_FILES=$(git diff --name-only "$DIFF_BASE" --diff-filter=d -- '*.rb' | grep -vE '^(spec/|test/|db/schema\.rb$|config/routes\.rb$)' || true)
+CHANGED_SPEC_FILES=$(git diff --name-only "$DIFF_BASE" --diff-filter=d -- 'spec/**/*.rb' || true)
+
+if [ -z "$CHANGED_APP_FILES" ] && [ -z "$CHANGED_SPEC_FILES" ]; then
+  echo "No Ruby files changed against $DIFF_LABEL"
+  exit 0
+fi
+
+find_related_specs() {
+  local file="$1"
+  local base
+
+  base="${file#app/}"
+  base="${base#lib/}"
+  base="${base%.rb}"
+
+  [ -f "spec/${base}_spec.rb" ] && echo "spec/${base}_spec.rb" || true
+
+  if [[ "$file" == app/controllers/* ]]; then
+    local resource="${base#controllers/}"
+    resource="${resource%_controller}"
+
+    [ -f "spec/requests/${resource}_request_spec.rb" ] && echo "spec/requests/${resource}_request_spec.rb" || true
+    [ -f "spec/requests/${resource}_spec.rb" ] && echo "spec/requests/${resource}_spec.rb" || true
+  fi
+}
+
+RELATED_SPECS=""
+if [ -n "$CHANGED_APP_FILES" ]; then
+  while IFS= read -r file || [ -n "$file" ]; do
+    RELATED_SPECS+="$(find_related_specs "$file")"
+    RELATED_SPECS+=$'\n'
+  done <<< "$CHANGED_APP_FILES"
+fi
+
+ALL_SPECS=$(printf '%s\n%s' "$CHANGED_SPEC_FILES" "$RELATED_SPECS" | sort -u | grep -v '^$' || true)
+
+echo "=== Changed files (vs $DIFF_LABEL) ==="
+echo "$CHANGED_APP_FILES" | sort | grep -v '^$' || true
+echo ""
+
+if [ -n "$ALL_SPECS" ]; then
+  echo "=== Spec files to run ==="
+  echo "$ALL_SPECS"
+  echo ""
+fi
+
+if [ -n "$CHANGED_APP_FILES" ]; then
+  echo "=== RubyCritic (diff only) ==="
+  # shellcheck disable=SC2086
+  if [ "$NO_BROWSER" = true ]; then
+    bundle exec rubycritic $CHANGED_APP_FILES --no-browser --format console
+  else
+    bundle exec rubycritic $CHANGED_APP_FILES --format html --format console
+  fi
+  echo ""
+fi

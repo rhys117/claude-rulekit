@@ -1,0 +1,19 @@
+{
+  "name": "exhalekit",
+  "version": "0.1.0",
+  "description": "Enforces the exhale half of Kent Beck's inhale/exhale rhythm. A post-commit hook nudges for a simplification pass after every feature or fix commit, and /simplify-with-analysis runs the bundled /simplify review plus rubycritic checks scoped to that commit and coverage regression checks against the base branch.",
+  "author": {
+    "name": "Rhys Murray"
+  },
+  "license": "MIT",
+  "keywords": [
+    "hooks",
+    "refactoring",
+    "simple-design",
+    "tdd",
+    "rubycritic",
+    "ruby",
+    "rails"
+  ],
+  "commands": "./commands"
+}

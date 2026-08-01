@@ -10,6 +10,13 @@
       "description": "Just-in-time coding conventions for Claude Code: path/content-matched rules that block or nudge at the moment of an edit, with pluggable detectors, per-session escape hatches, and read-side guardrails. Ships a Rails preset, including an optional commented Sorbet inline-RBS advisory that hands off to a bundled skill.",
       "category": "workflow",
       "tags": ["hooks", "conventions", "guardrails", "rails"]
+    },
+    {
+      "name": "exhalekit",
+      "source": "./exhalekit",
+      "description": "Enforces the exhale half of Kent Beck's inhale/exhale rhythm. A post-commit hook nudges for a simplification pass after every feature or fix commit, /simplify-with-analysis layers rubycritic and coverage regression checks on top of the bundled /simplify review, and /exhale-init installs bin/diff-quality into any Ruby project.",
+      "category": "workflow",
+      "tags": ["hooks", "refactoring", "simple-design", "tdd", "ruby"]
     }
   ]
 }
