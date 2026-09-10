@@ -22,6 +22,18 @@
         ]
       }
     ],
+    "PostToolUse": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "${CLAUDE_PLUGIN_ROOT}/bin/post-write-sweep.rb",
+            "timeout": 10
+          }
+        ]
+      }
+    ],
     "SessionStart": [
       {
         "hooks": [
@@ -29,6 +41,11 @@
             "type": "command",
             "command": "${CLAUDE_PLUGIN_ROOT}/bin/clear-advisory-sentinels.sh",
             "timeout": 5
+          },
+          {
+            "type": "command",
+            "command": "${CLAUDE_PLUGIN_ROOT}/bin/post-write-sweep.rb --bootstrap",
+            "timeout": 15
           }
         ]
       }
