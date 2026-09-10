@@ -39,6 +39,9 @@
 #
 # Block rules surface as hookSpecificOutput.permissionDecision = "deny"
 # (with permissionDecisionReason). Warn rules surface as additionalContext.
+#
+# This hook only sees the three write tools. post-write-sweep.rb replays the
+# same rules on PostToolUse for writes that arrive any other way.
 
 require 'json'
 require 'yaml'
@@ -72,50 +75,12 @@ relative_path = if !project_dir.empty? && file_path.start_with?("#{project_dir}/
                   file_path
 end
 
-fnmatch_flags = File::FNM_PATHNAME | File::FNM_DOTMATCH
-
 runner = RulesRunner.from_env(script_name: 'write-rules-check', project_dir: project_dir, session_id: session_id)
-
-rules.each do |name, rule|
-  next unless rule.is_a?(Hash)
-
-  type = rule['type']
-  next unless %w[block block_once warn].include?(type)
-
-  globs = Array(rule['files'])
-  next if globs.empty?
-
-  matches_file = globs.any? do |glob|
-    File.fnmatch?(glob, relative_path, fnmatch_flags) ||
-      File.fnmatch?(glob, file_path, fnmatch_flags)
-  end
-  next unless matches_file
-
-  pattern = rule['pattern']
-  if pattern && !pattern.to_s.empty?
-    begin
-      regex = Regexp.new(pattern)
-    rescue RegexpError
-      warn "[write-rules-check] invalid regex for rule '#{name}': #{pattern}"
-      next
-    end
-    next unless regex.match?(new_content)
-  end
-
-  detector = runner.load_detector(name)
-  result = if detector
-             detector.call(
-               file_path: file_path,
-               relative_path: relative_path,
-               new_content: new_content,
-               session_id: session_id,
-               rule: rule,
-             )
-           else
-             true
-           end
-
-  runner.record(name: name, rule: rule, detector_result: result)
-end
-
+runner.apply_write_rules(
+  rules,
+  file_path: file_path,
+  relative_path: relative_path,
+  new_content: new_content,
+  session_id: session_id,
+)
 runner.emit!
