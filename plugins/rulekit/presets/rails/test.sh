@@ -1,17 +1,20 @@
 #!/usr/bin/env bash
 # test.sh — Smoke-test the rulekit Rails preset against the rulekit engine.
 #
-# Pipes synthetic Claude Code PreToolUse events into bin/write-rules-check.rb
-# and bin/read-rules-check.rb with CLAUDE_RULES_DIR pointed at this preset, then
-# asserts on stdout + exit code. Every rule gets a positive case and, where it
-# matters, a negative one; the detector-backed rules, block_once, and the
-# read-side `roots:` config are all exercised.
+# Pipes synthetic Claude Code events into bin/write-rules-check.rb,
+# bin/read-rules-check.rb and bin/post-write-sweep.rb with CLAUDE_RULES_DIR
+# pointed at this preset, then asserts on stdout + exit code. Every rule gets a
+# positive case and, where it matters, a negative one; the detector-backed
+# rules, block_once, and the read-side `roots:` config are all exercised. The
+# final section drives the sweep against a throwaway git repo, since it reads
+# the working tree rather than the tool call.
 #
 # Run from anywhere:
 #   presets/rails/test.sh
 #
-# A throwaway project dir is created with mktemp (for sentinels and the
-# model-wrapper fixture) and removed on exit. No repo state is mutated.
+# Throwaway project dirs are created with mktemp (for sentinels, the
+# model-wrapper fixture and the sweep's repo) and removed on exit. No repo
+# state is mutated.
 
 set -uo pipefail
 
@@ -19,6 +22,7 @@ PLUGIN_ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 PRESET="$PLUGIN_ROOT/presets/rails"
 W="$PLUGIN_ROOT/bin/write-rules-check.rb"
 R="$PLUGIN_ROOT/bin/read-rules-check.rb"
+S="$PLUGIN_ROOT/bin/post-write-sweep.rb"
 
 command -v ruby >/dev/null || { echo "ruby not found on PATH"; exit 1; }
 
@@ -252,6 +256,79 @@ assert_exit     "uniqueness without index" "$EC" "0"
 SID="w-uniq-neg"
 OUT=$(run "$W" '{"tool_name":"Edit","session_id":"'"$SID"'","tool_input":{"file_path":"'"$SMOKE"'/app/models/account.rb","new_string":"  validates :email, uniqueness: true"}}'); EC=$?
 assert_silent "uniqueness on an indexed column stays silent" "$OUT"
+
+echo
+echo "==> post-write-sweep — writes that bypass Edit/Write"
+
+# The sweep reads the working tree, so it needs a real repo rather than the
+# bare fixture dir the other sections use.
+SWEEP="$(mktemp -d "${TMPDIR:-/tmp}/rulekit-sweep-test.XXXXXX")"
+(
+  cd "$SWEEP" || exit 1
+  git init -q .
+  git config user.email test@example.com
+  git config user.name test
+  mkdir -p app/models app/services
+  printf 'tmp/\n' > .gitignore
+  printf '%s\n' 'class Order < ApplicationRecord' '  def legacy' '    risky' '  rescue' \
+                '    nil' '  end' 'end' > app/models/order.rb
+  git add -A
+  git commit -qm base
+) >/dev/null 2>&1
+
+sweep() {   # $1 = JSON payload, $2 = optional flag
+  CLAUDE_PROJECT_DIR="$SWEEP" ruby "$S" ${2:-} <<< "$1"
+}
+BASH_EV='{"tool_name":"Bash","session_id":"sweep","tool_input":{"command":"true"}}'
+
+OUT=$(sweep '{"session_id":"sweep"}' --bootstrap)
+assert_silent "bootstrap only records the starting state" "$OUT"
+
+printf '%s\n' 'class Post < ApplicationRecord' '  default_scope { where(active: true) }' 'end' \
+  > "$SWEEP/app/models/post.rb"
+OUT=$(sweep "$BASH_EV"); EC=$?
+assert_contains "heredoc-written default_scope is caught after the fact" "$OUT" "no_default_scope"
+assert_contains "post-write block uses decision:block, not deny" "$OUT" '"decision":"block"'
+assert_not_contains "post-write block does not claim to have denied" "$OUT" "permissionDecision"
+assert_exit "post-write block" "$EC" "0"
+
+OUT=$(sweep "$BASH_EV")
+assert_silent "unchanged tree re-sweeps silently" "$OUT"
+
+# A rule-clean append to a file that already contains a bare rescue: only the
+# added lines are scanned, so the pre-existing offence must stay quiet.
+printf '\n# harmless trailing comment\n' >> "$SWEEP/app/models/order.rb"
+OUT=$(sweep "$BASH_EV")
+assert_silent "pre-existing violations in a touched file stay silent" "$OUT"
+
+printf '\n%s\n' 'def fresh' '  thing rescue nil' 'end' >> "$SWEEP/app/models/order.rb"
+OUT=$(sweep "$BASH_EV")
+assert_contains "a newly added violation in the same file fires" "$OUT" "bare_rescue"
+
+printf '%s\n' 'class Thing' '  def self.call' '    1' '  end' 'end' > "$SWEEP/app/services/thing.rb"
+OUT=$(sweep '{"tool_name":"Write","session_id":"sweep","tool_input":{"file_path":"'"$SWEEP"'/app/services/thing.rb"}}')
+assert_silent "a Write the pre-write hook already checked is not re-checked" "$OUT"
+
+printf '%s\n' 'class Widget' '  default_scope { all }' 'end' > "$SWEEP/app/models/widget.rb"
+OUT=$(sweep '{"tool_name":"Bash","session_id":"sweep","tool_input":{"command":"git checkout -- ."}}')
+assert_silent "git state moves record without evaluating" "$OUT"
+
+OUT=$(sweep "$BASH_EV")
+assert_silent "files recorded by a git state move do not fire later" "$OUT"
+
+# A branch can sit dirty in far more files than one tool call ever touches. The
+# cap has to count what moved since the last sweep, or a big working tree turns
+# the sweep off for the rest of the session.
+for i in $(seq 1 40); do printf 'class Noise%s; end\n' "$i" > "$SWEEP/app/models/noise_$i.rb"; done
+OUT=$(sweep "$BASH_EV")
+assert_silent "40 files at once exceeds the cap and only records" "$OUT"
+
+printf '%s\n' 'class Late < ApplicationRecord' '  default_scope { all }' 'end' \
+  > "$SWEEP/app/models/late.rb"
+OUT=$(sweep "$BASH_EV")
+assert_contains "one file moving against a 40-file dirty tree still fires" "$OUT" "no_default_scope"
+
+rm -rf "$SWEEP"
 
 echo
 echo "==================================="

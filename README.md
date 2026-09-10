@@ -2,7 +2,7 @@
 
 Just in time, not just in case.
 
-Rulekit delivers coding conventions to a Claude Code agent at the moment it acts, instead of front-loading them into `CLAUDE.md` where they compete for attention and quietly stop landing. `PreToolUse` hooks match the file the agent is about to edit (by path glob) and the content it is about to write (by regex), then either **block** the edit or inject a one line advisory right then. A read side hook nudges before broad `Bash`, `Grep`, and `Glob` searches, so junk stays out of the context window in the first place.
+Rulekit delivers coding conventions to a Claude Code agent at the moment it acts, instead of front-loading them into `CLAUDE.md` where they compete for attention and quietly stop landing. `PreToolUse` hooks match the file the agent is about to edit (by path glob) and the content it is about to write (by regex), then either **block** the edit or inject a one line advisory right then. A `PostToolUse` sweep guards the working tree itself, so the same rules still fire when a write arrives by heredoc, `sed -i`, a throwaway script or an MCP server rather than by `Edit`. A read side hook nudges before broad `Bash`, `Grep`, and `Glob` searches, so junk stays out of the context window in the first place.
 
 This is the pattern Anthropic calls [just-in-time context](https://www.anthropic.com/engineering/effective-context-engineering-for-ai-agents) and [progressive disclosure](https://www.anthropic.com/engineering/equipping-agents-for-the-real-world-with-agent-skills), aimed at the failure mode they call context rot: the more you put in the window up front, the less any single rule is recalled later.
 
@@ -10,17 +10,18 @@ This is the pattern Anthropic calls [just-in-time context](https://www.anthropic
 
 Anthropic ships a first party plugin, **Hookify**, that already does the declarative half of this: rules that fire on `Edit`, `Write`, and `MultiEdit`, match file path and content by regex, and choose between block and warn. If your rules are pure globs and regexes, use Hookify.
 
-Rulekit is for when you have outgrown pure declarative rules. It adds three things Hookify does not have:
+Rulekit is for when you have outgrown pure declarative rules. It adds four things Hookify does not have:
 
 1. **Pluggable detector modules.** Logic, not just a pattern. A detector is Ruby that runs in your repo, so it can read the file on disk, union it with the incoming edit, and name a real finding back ("this migration adds `NOT NULL` on `slug` and backfills it in the same file"). A regex knows what you are typing. A detector knows what is already there.
 2. **Per session escape hatches.** `block_once` denies the first attempt and yields on the retry, which encodes "this is usually wrong, but you are allowed to mean it." `warn` with `once_per_session` fires an advisory once and then stays quiet so it does not become noise.
-3. **Read side guardrails.** The same idea pointed upstream. A nudge on `Bash`, `Grep`, and `Glob` to narrow a search before it floods the window.
+3. **Rules the agent cannot route around.** Matching on `Edit`, `Write` and `MultiEdit` guards a tool, not a codebase, and an agent told to prefer `Bash` will write a whole subsystem through heredocs without a single rule firing. Rulekit also watches the working tree, so how the write arrived stops mattering.
+4. **Read side guardrails.** The same idea pointed upstream. A nudge on `Bash`, `Grep`, and `Glob` to narrow a search before it floods the window.
 
 Think of it as Hookify for power users.
 
 ## Install
 
-Rulekit needs **Ruby on `PATH`** (the hooks are Ruby scripts) and **`jq`** (used by the `SessionStart` cleanup hook).
+Rulekit needs **Ruby on `PATH`** (the hooks are Ruby scripts) and **`jq`** (used by the `SessionStart` cleanup hook). The post-write sweep also needs the project to be a **git repo**; without one it stays silent and the `PreToolUse` hooks carry on alone.
 
 ```
 /plugin marketplace add https://github.com/rhys117/claude-rulekit
@@ -54,7 +55,7 @@ Rules live in your project under `.claude/rules/`. Two files are loaded, one per
 
 | File | Fires on |
 |---|---|
-| `.claude/rules/write.yml` | `Edit`, `MultiEdit`, `Write` |
+| `.claude/rules/write.yml` | `Edit`, `MultiEdit`, `Write` before the write — and, via the [post-write sweep](#writes-that-bypass-the-write-tools), any other write once it lands |
 | `.claude/rules/read.yml`  | `Bash`, `Grep`, `Glob` |
 
 Each file is a YAML map keyed by rule name:
@@ -129,6 +130,47 @@ Detectors being Ruby is the point. A detector runs in the repo and can read the 
 
 `block_once` and `once_per_session` are tracked with sentinel files under `tmp/.claude-advisory/<session_id>/`. The bundled `SessionStart` hook clears the current session's sentinels at the start of each session (startup, resume, `/clear`, `/compact`), so "once" means once per working session, not once forever.
 
+## Writes that bypass the write tools
+
+A rule matched on `Edit|MultiEdit|Write` guards a tool, not a codebase. Everything below writes code without tripping one:
+
+```bash
+cat > app/services/thing.rb <<'EOF'   # heredoc
+sed -i '' 's/foo/bar/' app/models/x.rb
+python3 -c "pathlib.Path('app/x.rb').write_text(...)"
+```
+
+That is not a hypothetical. Claude Code's auto mode explicitly tells the agent to prefer `Bash` for file edits, and a whole service layer can land through heredocs with every rule silent.
+
+So `post-write-sweep.rb` runs on `PostToolUse` for **every** tool and replays the same `write.yml` rules over what actually changed on disk. Nothing about the rules changes; only when they are evaluated does.
+
+```
+PreToolUse(Edit|Write)  →  rules see the content about to be written
+PostToolUse(*)          →  rules see the lines that did get written
+```
+
+**How it decides what is new.** `git status` supplies the candidate set — cheap, and it honours `.gitignore`. Content comes from a per session snapshot of each file's last seen state under `tmp/.claude-advisory/<session_id>/snapshots/`, so `new_content` is the lines that one tool call added: not the whole file, and not the whole branch diff. A tracked file with no snapshot yet falls back to its `HEAD` version, so a one line `sed` into a committed file does not re-flag everything already in it. Writing the snapshot back is also what stops a rule re-firing on every later tool call — once swept, a file shows no delta until it changes again.
+
+**What it deliberately ignores.**
+
+| Ignored | Why |
+|---|---|
+| The file an `Edit`/`MultiEdit`/`Write`/`NotebookEdit` just wrote | The `PreToolUse` hook already checked that content; re-checking would warn twice |
+| `git checkout`, `rebase`, `stash`, `reset`, … | That is history arriving, not the agent authoring code |
+| More than 25 files moving in one tool call | Same reason, for whatever the command list misses. Counted against what changed since the last sweep, not against everything the branch has dirty, so a big working tree does not switch the sweep off |
+| The first sweep of a session | It only records the starting state, so a dirty branch does not flood the first tool call |
+| Files over 512KB, and binaries | Generated or vendored, not hand written |
+
+**Types behave the same, except `block`.** A write that has already landed cannot be denied, so a post-write block comes back as `decision: "block"` with a reason telling the agent to revert it, rather than `permissionDecision: "deny"`.
+
+| Type | `PreToolUse` | post-write sweep |
+|---|---|---|
+| `block` | Denies the call | `decision: block` — "this landed, undo it" |
+| `block_once` | Denies once, yields on retry | Same, and the retry is a no-op write with no delta |
+| `warn` | `additionalContext` | `additionalContext` |
+
+The sweep is not a substitute for the pre-write hooks; catching a write before it happens is strictly better. It is the backstop for when the agent takes a route the matchers do not cover.
+
 ## Repo layout
 
 This repo is a marketplace, not a plugin. The root holds only marketplace metadata and docs; every plugin lives under `plugins/<name>/`, matching the convention Anthropic's own marketplace uses.
@@ -147,10 +189,11 @@ claude-rulekit/
     │   ├── .claude-plugin/
     │   │   └── plugin.json                   # name, version, keywords only
     │   ├── hooks/
-    │   │   └── hooks.json                    # PreToolUse (write + read), SessionStart
+    │   │   └── hooks.json                    # PreToolUse (write + read), PostToolUse, SessionStart
     │   ├── bin/
     │   │   ├── write-rules-check.rb          # Edit/MultiEdit/Write engine
     │   │   ├── read-rules-check.rb           # Bash/Grep/Glob engine
+    │   │   ├── post-write-sweep.rb           # replays write.yml over writes that bypassed the tools
     │   │   └── clear-advisory-sentinels.sh   # SessionStart sentinel cleanup
     │   ├── lib/
     │   │   └── rules_runner.rb               # shared matching, sentinels, output
