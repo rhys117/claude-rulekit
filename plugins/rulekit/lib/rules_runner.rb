@@ -1,5 +1,6 @@
 require 'fileutils'
 require 'json'
+require_relative 'laya_client'
 
 # Shared engine for write-rules-check.rb, read-rules-check.rb and
 # post-write-sweep.rb.
@@ -60,6 +61,10 @@ class RulesRunner
   # recording each rule that fires. `new_content` is whatever the caller counts
   # as newly written: the tool's new_string/content before the write, or the
   # lines a write added once it has landed.
+  #
+  # Decision order once glob + pattern match: a detector file wins; otherwise a
+  # `laya:` block asks the Laya server (silent if it is not running); otherwise
+  # the rule fires. `pattern` stays a cheap prefilter in front of Laya.
   def apply_write_rules(rules, file_path:, relative_path:, new_content:, session_id:)
     rules.each do |name, rule|
       next unless rule.is_a?(Hash)
@@ -76,6 +81,8 @@ class RulesRunner
                    session_id: session_id,
                    rule: rule,
                  )
+               elsif rule['laya'].is_a?(Hash)
+                 laya.fires?(rule['laya'], relative_path: relative_path, new_content: new_content)
                else
                  true
                end
@@ -156,6 +163,11 @@ class RulesRunner
   end
 
   private
+
+  # Built on first use so rules without a `laya:` block never touch the network.
+  def laya
+    @laya ||= LayaClient.from_env(session_dir: @session_dir)
+  end
 
   def pre_tool_use?
     @event == 'PreToolUse'

@@ -18,6 +18,9 @@ Smoke-test the rulekit rules installed in this project (`.claude/rules/`).
    `{"tool_name":"Edit","session_id":"rules-test","tool_input":{"file_path":"app/models/x.rb","new_string":"..."}}`.
    `block`/`block_once` rules should exit 2 and emit `permissionDecision`; `warn`
    rules should exit 0 and emit `additionalContext`.
+   Rules with a `laya:` block need a Laya server: check
+   `curl -sf "${LAYA_URL:-http://127.0.0.1:8000}/health"` first. If it is not
+   reachable, mark those rules SKIPPED (not failed) — they fail open by design.
 4. Report a pass/fail table per rule. Note any rule whose detector errored or
    whose pattern never matched its own intended trigger.
 
