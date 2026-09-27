@@ -35,7 +35,9 @@
 #                                      enabling per-target once_per_session.
 #
 # If a YAML rule has no matching detector file the rule fires whenever its
-# files glob (and optional pattern) match.
+# files glob (and optional pattern) match — unless it has a `laya:` block
+# (question:, threshold:), in which case a local Laya server decides and the
+# rule stays silent when that server is unreachable. See lib/laya_client.rb.
 #
 # Block rules surface as hookSpecificOutput.permissionDecision = "deny"
 # (with permissionDecisionReason). Warn rules surface as additionalContext.

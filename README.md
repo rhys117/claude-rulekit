@@ -78,6 +78,7 @@ no_default_scope:
 | `files` | write, read | Path globs (`**` supported). On write, the file being edited; on read, the path the tool touches (the `Read` file, or a `Grep`/`Glob` path). |
 | `pattern` | write | Optional Ruby regex matched against the new content. Omit to fire on the file glob alone. |
 | `tools` | read | Optional list of tool names. Defaults to `[Bash, Grep, Glob]`; add `Read` to fire when the agent opens a file. |
+| `laya` | write | Optional. Ask a local [Laya](#semantic-rules-with-laya-optional) server a yes/no question instead of firing on the match alone. |
 | `context` | all | The message returned to the agent. A detector may override it. |
 | `once_per_session` | warn | When `true`, the rule fires at most once per session. |
 
@@ -119,6 +120,59 @@ Return:
 - a `Hash` to fire with overrides: `:context` replaces the message for this fire, and `:sentinel_suffix` namespaces the session sentinel (so a `once_per_session` rule can fire once per target, for example once per model, rather than once globally).
 
 Detectors being Ruby is the point. A detector runs in the repo and can read the project's own files, so it can name a real finding rather than guess from a string match.
+
+## Semantic rules with Laya (optional)
+
+Some conventions are easy to state and hard to regex. A write rule can hand the match to [Laya](https://github.com/NandhaKishorM/laya), a small local decision model. Laya answers a yes/no question with a probability, and the rule fires when that probability clears the threshold.
+
+```yaml
+migration_backfill_semantic:
+  type: warn
+  files: ["db/migrate/**/*"]
+  pattern: 'update_all|find_each|update!'   # optional prefilter, runs before Laya
+  laya:
+    question: "Does this migration backfill data in the same file that adds a NOT NULL column?"
+    threshold: 0.8                            # default 0.7
+  context: Split the backfill into its own migration.
+```
+
+```
+glob + pattern match ─► detector file?  ── yes ─► detector decides
+                              │ no
+                              ▼
+                        `laya:` block?  ── no ──► fire
+                              │ yes
+                              ▼
+               POST $LAYA_URL/v1/systemone
+                 ├─ p ≥ threshold ─► fire
+                 ├─ p < threshold ─► silent
+                 └─ unreachable   ─► silent, skip Laya for 60s this session
+```
+
+**It is opt in and fails open.** Laya is only contacted by rules that have a `laya:` block. If the server is not running, those rules stay silent and every other rule behaves exactly as before. Keep `laya:` rules to `warn`: an answer that comes as a probability is a nudge, not a guarantee.
+
+**Running a server.** Laya needs Python 3.10+ and downloads a ~1.7GB checkpoint on first start. `laya-serve` binds to `0.0.0.0` and preloads every checkpoint by default, so pin both:
+
+```bash
+git clone https://github.com/NandhaKishorM/laya && cd laya
+python3 -m venv .venv && .venv/bin/pip install -e ".[serve]"
+LAYA_HOST=127.0.0.1 LAYA_MODELS=english LAYA_DEVICE=mps .venv/bin/laya-serve   # mps on Apple Silicon
+```
+
+Check latency before you rely on it. The pre-write hook runs on every edit and has a 5s budget:
+
+```bash
+curl -s -o /dev/null -w '%{time_total}s\n' localhost:8000/v1/systemone -H 'content-type: application/json' \
+  -d '{"state":"User.find_each { |u| u.update!(slug: u.name.parameterize) }","questions":{"rule":{"type":"noul","instructions":"Does this backfill data?"}}}'
+```
+
+| Env | Default | |
+|---|---|---|
+| `LAYA_URL` | `http://127.0.0.1:8000` | Server base URL |
+| `LAYA_TIMEOUT` | `2.0` | Read timeout, seconds |
+| `LAYA_API_KEY` | unset | Bearer token, if the server was started with one |
+
+Rulekit sends the file path and the new content (truncated to ~2000 characters, about what the English checkpoint reads). `test/laya.sh` exercises all of this against a fake server, so it runs without the model.
 
 ## block, warn, and block_once
 
@@ -196,10 +250,14 @@ claude-rulekit/
     │   │   ├── post-write-sweep.rb           # replays write.yml over writes that bypassed the tools
     │   │   └── clear-advisory-sentinels.sh   # SessionStart sentinel cleanup
     │   ├── lib/
-    │   │   └── rules_runner.rb               # shared matching, sentinels, output
+    │   │   ├── rules_runner.rb               # shared matching, sentinels, output
+    │   │   └── laya_client.rb                # optional `laya:` rules over HTTP
     │   ├── commands/
     │   │   ├── rules-init.md                 # /rules-init <preset>
     │   │   └── rules-test.md                 # /rules-test
+    │   ├── test/
+    │   │   ├── laya.sh                       # `laya:` rules against a fake server
+    │   │   └── fake_laya_server.rb
     │   ├── skills/
     │   │   └── sorbet-inline-rbs/
     │   │       └── SKILL.md                  # invoked by the dormant Sorbet rule
