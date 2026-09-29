@@ -96,6 +96,7 @@ assert_contains "above threshold fires" "$OUT" "semantic_backfill"
 OUT=$(run "$(edit s1 db/migrate/002_x.rb 'add_index :users, :email')")
 assert_silent "below threshold stays silent" "$OUT"
 assert_contains "request carries the file path" "$(tail -1 "$LOG")" "db/migrate/002_x.rb"
+assert_contains "request pins the english checkpoint" "$(tail -1 "$LOG")" '"model":"english"'
 
 BEFORE=$(requests)
 OUT=$(run "$(edit s1 app/models/x.rb 'backfill')")

@@ -22,8 +22,13 @@ require 'uri'
 #   LAYA_URL      base URL (default http://127.0.0.1:8000)
 #   LAYA_TIMEOUT  read timeout in seconds (default 2.0)
 #   LAYA_API_KEY  bearer token, if the server was started with one
+#   LAYA_MODEL    checkpoint to pin (default english). Always sent: left to
+#                 auto-route, laya-serve's language detection reads code as
+#                 non-English, picks the multilingual checkpoint and — if that
+#                 isn't downloaded yet — blocks on a download mid-request.
 class LayaClient
   DEFAULT_URL = 'http://127.0.0.1:8000'.freeze
+  DEFAULT_MODEL = 'english'.freeze
   DEFAULT_THRESHOLD = 0.7
   OPEN_TIMEOUT = 0.2
   DOWN_TTL = 60
@@ -36,12 +41,14 @@ class LayaClient
       url: ENV.fetch('LAYA_URL', DEFAULT_URL),
       read_timeout: Float(ENV.fetch('LAYA_TIMEOUT', '2.0')),
       api_key: ENV['LAYA_API_KEY'],
+      model: ENV.fetch('LAYA_MODEL', DEFAULT_MODEL),
       down_marker: File.join(session_dir, 'laya-down'),
     )
   end
 
-  def initialize(url:, read_timeout:, api_key:, down_marker:)
+  def initialize(url:, read_timeout:, api_key:, model:, down_marker:)
     @uri = URI.join(url, '/v1/systemone')
+    @model = model
     @read_timeout = read_timeout
     @api_key = api_key
     @down_marker = down_marker
@@ -65,6 +72,7 @@ class LayaClient
     return nil if down?
 
     body = {
+      model: @model,
       state: text[0, MAX_CHARS],
       questions: { QUESTION_KEY => { type: 'noul', instructions: question } },
     }
