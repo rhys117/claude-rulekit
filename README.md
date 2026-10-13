@@ -117,6 +117,7 @@ no_default_scope:
 | `tools` | tool | Optional list of tool names. Defaults to `[Bash, Grep, Glob]`; add `Read` to fire when the agent opens a file. |
 | `judge` | write | Optional. Ask a [model](#semantic-rules-with-a-judge-optional) a yes/no question when the agent finishes its turn, instead of firing on the match alone. |
 | `context` | all | The message returned to the agent. A detector may override it. |
+| `enabled` | all | Optional. `false` switches the rule off without deleting it. See [switching a rule off](#switching-a-rule-off). |
 | `once_per_session` | warn | When `true`, the rule fires at most once per session. |
 
 What each kind supports:
@@ -135,6 +136,22 @@ What each kind supports:
 A tool rule that carries `judge:` is skipped, not fired on the bare match. A tool rule is decided before the call with no model in the loop; use a detector there instead.
 
 Tool rules were called read rules. `read.yml` and `read_rubric.yml` still load when `tools.yml` and `tools_rubric.yml` are absent, so rename them when convenient; once the new file exists the old one is ignored.
+
+### Switching a rule off
+
+Add `enabled: false` to a rule and no hook sees it:
+
+```yaml
+# .claude/rules/write_rubric.yml
+no_default_scope:
+  enabled: false
+  type: block
+  ...
+```
+
+- **It survives a recompile.** `/rules-compile` rewrites the rubric files, so deleting a generated rule only lasts until the next run. The flag is carried forward for as long as the instruction still compiles to that rule.
+- **It works in all four files**, hand-written or generated.
+- **`rules-rubric.rb validate` counts them**, so a switched-off rule is not forgotten, and reports a value that is not `true` or `false`.
 
 Rule names must be unique across all four files; they share one per session sentinel namespace. If a generated rule and a hand-written one share a name, the hand-written one runs.
 
@@ -186,7 +203,7 @@ no_default_scope:
 ```
 
 - **Rules come only from your files.** The command never adds one it thinks you should have, and every rule quotes its line.
-- **The rubric files are rewritten on every compile.** Keep hand-written rules in `write.yml` and `tools.yml`.
+- **The rubric files are rewritten on every compile.** Keep hand-written rules in `write.yml` and `tools.yml`. The one edit that is kept is [`enabled: false`](#switching-a-rule-off), for a generated rule you do not want.
 - **Read the generated detectors.** They are code that runs in your hooks.
 - **`judge` rules need a judge configured**; the rest work offline.
 

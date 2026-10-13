@@ -6,7 +6,8 @@ require 'digest'
 # beside the hand-written files, a hand-written rule wins a name clash, the
 # `_rubric` metadata is never treated as a rule, tool rules honour `pattern`,
 # `exclude` carves a path out of a rule on both sides, the legacy read.yml
-# names still load, `sources` finds instruction files and reports staleness,
+# names still load, `enabled: false` switches a rule off in every hook,
+# `sources` finds instruction files and reports staleness,
 # and `validate` accepts a good rubric and names what is wrong with a bad one.
 
 RSpec.describe 'rubric files' do
@@ -214,6 +215,80 @@ RSpec.describe 'rubric files' do
 
       expect(out).to include('from tools.yml')
       expect(out).not_to include('from read.yml')
+    end
+  end
+
+  describe 'a rule with enabled: false' do
+    def disable(file, rule)
+      path = File.join(project.rules_dir, file)
+      File.write(path, File.read(path).sub("#{rule}:\n", "#{rule}:\n  enabled: false\n"))
+    end
+
+    before { write_rubrics }
+
+    it 'is left out by the write hook and the sweep' do
+      disable('write_rubric.yml', 'no_default_scope')
+
+      expect(write('app/models/x.rb', 'default_scope { }')).to be_silent
+
+      project.sweep({ session_id: 's' }, '--bootstrap')
+      project.write('app/models/y.rb', "default_scope { where(x: 1) }\n")
+      expect(project.sweep(project.bash('true'))).to be_silent
+    end
+
+    it 'is left out by the tool hook' do
+      disable('tools_rubric.yml', 'use_pnpm')
+
+      out = project.tool_hook(project.bash('npm install left-pad'))
+
+      expect(out).to be_silent
+      expect(out.exit_code).to eq(0)
+    end
+
+    it 'is not sent to the judge on Stop' do
+      disable('write_rubric.yml', 'semantic_backfill')
+      project.record('s')
+      project.write('db/migrate/001_x.rb', "User.find_each { backfill }\n")
+
+      expect { expect(project.stop('s')).to be_silent }.not_to(change { @judge.requests.size })
+    end
+
+    it 'leaves the other rules in the file running' do
+      disable('write_rubric.yml', 'semantic_backfill')
+
+      expect(write('app/models/x.rb', 'default_scope { }')).to fire('no_default_scope')
+    end
+
+    it 'works on a hand-written rule too, and still shadows a generated one of the same name' do
+      project.rules('write.yml', <<~YAML)
+        shadowed:
+          enabled: false
+          type: warn
+          files: ["lib/**/*"]
+          context: hand-written version
+      YAML
+
+      expect(write('lib/x.rb', 'anything')).to be_silent
+    end
+
+    it 'is counted by validate, which still checks the rule' do
+      disable('write_rubric.yml', 'no_default_scope')
+
+      out = project.rubric('validate')
+
+      expect(out.stdout).to include('write_rubric.yml: 3 rules (1 pattern, 1 judge, 0 detector, 1 match only), 1 skipped, 1 disabled')
+      expect(out.stdout).to include('tools_rubric.yml: 1 rules (1 pattern, 0 judge, 0 detector, 0 match only), 0 skipped, 0 disabled')
+      expect(out.exit_code).to eq(0)
+    end
+
+    it 'must be a boolean, since anything else leaves the rule on' do
+      path = File.join(project.rules_dir, 'write_rubric.yml')
+      File.write(path, File.read(path).sub("no_default_scope:\n", "no_default_scope:\n  enabled: \"false\"\n"))
+
+      expect(write('app/models/x.rb', 'default_scope { }')).to fire('no_default_scope')
+      out = project.rubric('validate')
+      expect(out.stdout).to include('no_default_scope: enabled must be true or false')
+      expect(out.exit_code).to eq(1)
     end
   end
 

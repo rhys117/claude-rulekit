@@ -18,6 +18,8 @@ Smoke-test the rulekit rules installed in this project (`.claude/rules/`).
    rules), at least one `files` glob (write rules) or a valid `tools` list /
    default (tool rules), and a non-empty `context`. Report any tool rule with a
    `judge:` block: the hook skips it, since `judge` is a write-rule key.
+   List any rule with `enabled: false` as switched off and do not test it; the
+   hooks leave it out.
 3. For each rule, synthesise one PreToolUse payload that SHOULD trigger it and,
    where practical, one that should NOT, then pipe each through the matching hook
    and check the result:

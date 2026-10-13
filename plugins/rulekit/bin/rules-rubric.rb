@@ -137,6 +137,10 @@ class RubricFile
     end
   end
 
+  def disabled_count
+    rules.count { |_, rule| RulesRunner.disabled?(rule) }
+  end
+
   def validate(taken_names)
     return unless exist?
 
@@ -210,6 +214,9 @@ class RubricFile
     end
 
     validate_provenance(rule_name, rule)
+    if rule.key?('enabled') && ![true, false].include?(rule['enabled'])
+      issue rule_name, 'enabled must be true or false; anything else leaves the rule on'
+    end
     %w[files exclude].each do |key|
       issue rule_name, "#{key} must be a list of globs" if rule.key?(key) && !rule[key].is_a?(Array)
     end
@@ -365,7 +372,8 @@ def print_validation(rubrics)
 
     counts = rubric.shape_counts
     shapes = ['pattern', 'judge', 'detector', 'match only'].map { |shape| "#{counts[shape]} #{shape}" }.join(', ')
-    puts "#{rubric.name}: #{rubric.rules.size} rules (#{shapes}), #{rubric.skipped.size} skipped"
+    puts "#{rubric.name}: #{rubric.rules.size} rules (#{shapes}), #{rubric.skipped.size} skipped, " \
+         "#{rubric.disabled_count} disabled"
   end
 
   notes = rubrics.flat_map(&:notes)
