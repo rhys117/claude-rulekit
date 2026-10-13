@@ -3,7 +3,8 @@
 # Covers: off unless RULEKIT_ABIDE_RUBRIC is set, a model-checked rule is
 # asked about and blocks, scope and its every-file default, the rubric's own
 # threshold, the rules left out (not model-checked, not active, not boolean),
-# a path in the variable, a write.yml rule of the same name winning, the
+# a path in the variable, a write.yml rule of the same name winning or
+# switching it off, the
 # per-edit hooks never seeing these rules, and failing open on a bad rubric.
 
 RSpec.describe 'an Abide rubric' do
@@ -151,6 +152,19 @@ RSpec.describe 'an Abide rubric' do
     expect(out).to fire('own_rule')
     expect(out.stdout).not_to include('Rule everywhere as written')
     expect(judge.requests.size).to eq(1), 'both kinds share one request per file'
+  end
+
+  it 'is switched off by enabled: false under the same name in write.yml' do
+    project.rules('write.yml', <<~YAML)
+      everywhere:
+        enabled: false
+    YAML
+
+    out = changed('db/migrate/001_x.rb', 'User.find_each { backfill }')
+
+    expect(out).to fire('no-backfill-in-migration')
+    expect(out).not_to fire('everywhere')
+    expect(judge.requests.last.questions.keys).to eq(['no-backfill-in-migration'])
   end
 
   it 'is never seen by the per-edit hooks' do

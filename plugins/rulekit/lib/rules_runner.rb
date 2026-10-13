@@ -51,13 +51,22 @@ class RulesRunner
   # a generated rule is switched off: /rules-compile keeps the flag when it
   # rewrites the rubric.
   def self.load_rules(project_dir, kind)
-    rules = ['_rubric', ''].each_with_object({}) do |suffix, merged|
+    enabled(all_rules(project_dir, kind))
+  end
+
+  # The same hash with the switched-off rules still in it, for a caller that
+  # lays these rules over others before dropping them.
+  def self.all_rules(project_dir, kind)
+    ['_rubric', ''].each_with_object({}) do |suffix, merged|
       path = rules_file(project_dir, kind, suffix)
       next if path.nil?
 
       loaded = YAML.safe_load_file(path)
       merged.merge!(loaded) if loaded.is_a?(Hash)
     end
+  end
+
+  def self.enabled(rules)
     rules.reject { |_, rule| disabled?(rule) }
   end
 

@@ -31,7 +31,8 @@
 # -------------
 # With RULEKIT_ABIDE_RUBRIC set, the model-checked rules of an Abide rubric
 # (lib/abide_rubric.rb) are judged here too, as `block` rules. Only this hook
-# reads them, and a write.yml rule of the same name wins.
+# reads them, and a write.yml rule of the same name wins — including one that
+# is only `enabled: false`, which switches the Abide rule off.
 #
 # It stays silent — recording only — when the judge is not configured, when it
 # cannot be reached, on the first pass of a session, and when more than
@@ -59,7 +60,7 @@ session_id = input['session_id'].to_s
 project_dir = ENV['CLAUDE_PROJECT_DIR'].to_s
 exit 0 if project_dir.empty?
 
-rules = AbideRubric.rules(project_dir).merge(RulesRunner.load_rules(project_dir, 'write'))
+rules = RulesRunner.enabled(AbideRubric.rules(project_dir).merge(RulesRunner.all_rules(project_dir, 'write')))
 runner = RulesRunner.from_env(
   script_name: 'stop-rules-check',
   project_dir: project_dir,

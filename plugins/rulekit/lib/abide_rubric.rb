@@ -14,6 +14,9 @@ require 'json'
 #   thresholds.act (0.8)        -> judge.threshold, as a `block`
 #   text and source             -> context
 #
+# A rule is switched off by its own `status` in the rubric, or from rulekit's
+# side by a write.yml entry of the same name with `enabled: false`.
+#
 # Left out: rules a model does not check (lint, deferred, unenforceable), rules
 # whose status is not `active`, and `choice` and `score` questions, which the
 # judge protocol here has no shape for. Abide's flag band — a note to the user

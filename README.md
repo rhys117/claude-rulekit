@@ -341,6 +341,7 @@ Each rule is read as a `block` rule with a `judge:` block:
 - **`when` is ignored.** An `edit` rule and a `turn` rule are both asked once per changed file, about the lines the turn added to it. A `turn` rule that needs the whole diff or the prompt ("did this add more than was asked") is answering with less than Abide gives it.
 - **Globs are Ruby's, not picomatch's.** `**/*.ts` means the same in both; a brace set like `*.{ts,tsx}` or a `!` negation does not match here.
 - **A `write.yml` rule of the same name wins**, and a missing, malformed or other-version rubric is ignored.
+- **Switching one off.** Abide's own `status` is respected: anything but `active` is skipped. To switch a rule off from rulekit's side without touching the rubric, add its `id` to `write.yml` with only `enabled: false`. `enabled` inside `rubric.json` is not read, since Abide would drop it on the next compile.
 
 Running Abide's own hooks as well would ask each question twice. Use this instead of `abide init`, not on top of it.
 
