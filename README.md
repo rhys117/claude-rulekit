@@ -49,14 +49,16 @@ The two are independent — install either, or both. Exhalekit needs **`jq`**; i
 
 `/rules-init rails` copies the bundled Rails preset from `plugins/rulekit/presets/rails/` into your project's `.claude/rules/`. `/rules-test` feeds synthetic tool calls through the hooks to confirm patterns compile and detectors load.
 
+Already have a `CLAUDE.md` or `AGENTS.md` full of conventions? `/rules-compile` [turns them into rules](#compiling-rules-from-your-instruction-files).
+
 ## How rules work
 
-Rules live in your project under `.claude/rules/`. Two files are loaded, one per side of the agent's work:
+Rules live in your project under `.claude/rules/`. Each side of the agent's work has a file you write by hand and, optionally, one that [`/rules-compile` generates](#compiling-rules-from-your-instruction-files). Both are loaded and have the same format:
 
 | File | Fires on |
 |---|---|
-| `.claude/rules/write.yml` | `Edit`, `MultiEdit`, `Write` before the write — and, via the [post-write sweep](#writes-that-bypass-the-write-tools), any other write once it lands |
-| `.claude/rules/read.yml`  | `Bash`, `Grep`, `Glob` |
+| `write.yml`, `write_rubric.yml` | `Edit`, `MultiEdit`, `Write` before the write — and, via the [post-write sweep](#writes-that-bypass-the-write-tools), any other write once it lands |
+| `read.yml`, `read_rubric.yml` | `Bash`, `Grep`, `Glob`, and `Read` when a rule asks for it |
 
 Each file is a YAML map keyed by rule name:
 
@@ -76,14 +78,75 @@ no_default_scope:
 |---|---|---|
 | `type` | all | `block`, `block_once`, or `warn`. |
 | `files` | write, read | Path globs (`**` supported). On write, the file being edited; on read, the path the tool touches (the `Read` file, or a `Grep`/`Glob` path). |
-| `pattern` | write | Optional Ruby regex matched against the new content. Omit to fire on the file glob alone. |
+| `exclude` | write, read | Optional path globs. A path matching one is left alone, for "everywhere except here". |
+| `pattern` | write, read | Optional Ruby regex. On write, matched against the new content. On read, against what the tool was asked for: the `Bash` command, the `Grep`/`Glob` search pattern, the `Read` path. Omit to fire on the other matches alone. |
 | `tools` | read | Optional list of tool names. Defaults to `[Bash, Grep, Glob]`; add `Read` to fire when the agent opens a file. |
+| `judge` | write | Optional. Ask a [model](#semantic-rules-with-a-judge-optional) a yes/no question when the agent finishes its turn, instead of firing on the match alone. |
 | `context` | all | The message returned to the agent. A detector may override it. |
 | `once_per_session` | warn | When `true`, the rule fires at most once per session. |
 
-Rule names must be unique across `write.yml` **and** `read.yml`; both share one per session sentinel namespace.
+Rule names must be unique across all four files; they share one per session sentinel namespace. If a generated rule and a hand-written one share a name, the hand-written one runs.
 
 Set `CLAUDE_RULES_DIR` to point the engine at a different directory if you do not want `.claude/rules/`.
+
+## Compiling rules from your instruction files
+
+Most projects already state their conventions in prose, in `CLAUDE.md` or `AGENTS.md`. `/rules-compile` has the agent read those files and write each instruction as a rulekit rule, into two generated files that load beside your own:
+
+```
+CLAUDE.md, AGENTS.md, nested ones,          .claude/rules/
+.cursorrules, CONTRIBUTING.md                 ├── write.yml          yours
+        │                                     ├── read.yml           yours
+        ▼                                     ├── write_rubric.yml   generated
+  /rules-compile ─────────────────────────►   ├── read_rubric.yml    generated
+  every instructing sentence, in the          └── detectors/         yours + generated
+  cheapest shape that decides it
+```
+
+Each instruction is given the first shape that can decide it:
+
+| The instruction is about | Becomes |
+|---|---|
+| What the agent runs, searches or opens ("use pnpm, never npm") | a read rule: `tools` + `pattern` and/or `files` |
+| A place rather than particular code ("never edit `db/schema.rb`") | a write rule on `files` alone |
+| Something a regex decides exactly ("no `default_scope`") | a write rule with `pattern` |
+| Counting, measuring, or a lookup in another file | a rule plus a small generated [detector](#detectors) |
+| Something a reviewer could decide from one file's added lines | a write rule with [`judge`](#semantic-rules-with-a-judge-optional) |
+| The conversation, the change as a whole, the whole codebase | recorded as skipped, with the reason |
+
+A generated rule is an ordinary rule plus where it came from:
+
+```yaml
+# .claude/rules/write_rubric.yml
+_rubric:
+  compiled_at: "2026-10-13"
+  sources:
+    - { path: CLAUDE.md, sha256: "9f2c…" }
+  skipped:
+    - { text: "If uncertain, ask.", source: "CLAUDE.md:12", reason: "about the conversation, not the code" }
+
+no_default_scope:
+  type: block
+  files: ["app/models/**/*.rb"]
+  pattern: '(?<!\w)default_scope(?!\w)'
+  context: Default scopes are not allowed. Scope explicitly at the call site.
+  text: "We do not allow default scopes."     # the user's words
+  source: "CLAUDE.md:41"                      # where they wrote them
+```
+
+- **Rules come only from your files.** The command never adds one it thinks you should have, and every rule quotes its line.
+- **The rubric files are rewritten on every compile.** Keep hand-written rules in `write.yml` and `read.yml`.
+- **Read the generated detectors.** They are code that runs in your hooks.
+- **`judge` rules need a judge configured**; the rest work offline.
+
+`bin/rules-rubric.rb` is the deterministic half:
+
+| Command | Does |
+|---|---|
+| `rules-rubric.rb sources` | Lists the instruction files, the glob each applies to, its sha256, and whether the rubric is out of date with it |
+| `rules-rubric.rb validate` | Checks both rubric files against what the hooks accept: types, globs, regexes that compile, detectors that load, unique names, sources that still match. Exits 1 on any issue |
+
+Nothing tells you when a source has changed since the last compile; run `rules-rubric.rb sources` to check, and `/rules-compile` again to refresh.
 
 ## Detectors
 
@@ -119,6 +182,64 @@ Return:
 - a `Hash` to fire with overrides: `:context` replaces the message for this fire, and `:sentinel_suffix` namespaces the session sentinel (so a `once_per_session` rule can fire once per target, for example once per model, rather than once globally).
 
 Detectors being Ruby is the point. A detector runs in the repo and can read the project's own files, so it can name a real finding rather than guess from a string match.
+
+## Semantic rules with a judge (optional)
+
+Some conventions are easy to state and hard to regex. A write rule can hand the match to a decision model, the judge. It answers a yes/no question with a probability, and the rule fires when that probability clears the threshold.
+
+The rule names no model. The default judge is [Jev](https://typesafe.ai), TypeSafe's hosted decision model, and which one answers is set by environment variable, so swapping it never touches `write.yml`.
+
+```yaml
+migration_backfill_semantic:
+  type: block
+  files: ["db/migrate/**/*"]
+  pattern: 'update_all|find_each|update!'   # optional prefilter, runs first    
+  judge:
+    question: "Does this migration backfill data in the same file that adds a NOT NULL column?"
+    threshold: 0.8                            # default 0.7
+  context: Split the backfill into its own migration.
+```
+
+The judge may be a paid network call, so a `judge:` rule is skipped on every edit and judged once, on `Stop`, over what the turn changed:
+
+```
+PreToolUse / PostToolUse                Stop
+────────────────────────────────        ──────────────────────────────────────────
+glob, pattern, detector rules           `judge:` rules only
+`judge:` rules skipped, nothing sent    files changed since the prompt
+                                          └─ per file, one request with every
+                                             matching `judge:` rule as a question
+                                               ├─ p ≥ threshold ─► turn stays open
+                                               ├─ p < threshold ─► silent
+                                               └─ unset / down  ─► silent
+```
+
+| Type | At `Stop` |
+|---|---|
+| `block` | `decision: block`. The agent is sent back with the finding. |
+| `block_once` | Same, the first time this session. |
+| `warn` | `additionalContext`. The agent still sees it and the turn continues, but as hook feedback rather than an error. Honours `once_per_session`. |
+
+- **One turn is kept open at most twice**: the first finding, then one re-check of whatever the agent changed in response. Anything after that goes to you as a `systemMessage` and the turn ends.
+- **A finding the agent leaves alone does not come back.** Only files that moved since the last `Stop` are asked about.
+- **Your own edits between turns are not judged.** The working tree is recorded again on every prompt.
+- **A detector file still wins.** A rule with one is decided before the write as usual and never sent to the judge.
+- **It is opt in and fails open.** With no key and no URL set, nothing is sent. If the judge is unreachable, `judge:` rules stay silent.
+
+It needs a git repo, like the post-write sweep, and it stays silent when more than 25 files changed in one turn. A `/compact` in the middle of a turn resets the record, so edits made before it in that turn are not judged.
+
+| Env | Default | |
+|---|---|---|
+| `RULEKIT_JUDGE_API_KEY` | unset | Bearer token. Falls back to `TYPESAFE_AI_API_KEY` |
+| `RULEKIT_JUDGE_URL` | `https://api.typesafe.ai/v1` | API base. Falls back to `TYPESAFE_AI_BASE_URL` |
+| `RULEKIT_JUDGE_MODEL` | `jev-latest` | Model id |
+| `RULEKIT_JUDGE_TIMEOUT` | `10.0` | Read timeout, seconds |
+
+The judge is on once either the key or the URL is set. For Jev that means a key. Any server that speaks the same `POST {url}/systemone` protocol works as a drop-in: set the URL and model, and a key only if it wants one.
+
+Rulekit sends the file path and the lines the turn added to that file (truncated to 8000 characters) to the judge. Leave `judge:` off rules that cover files you would not send to a third party.
+
+`test/judge.sh` exercises all of this against a fake server, so it runs without a key.
 
 ## block, warn, and block_once
 
@@ -189,17 +310,26 @@ claude-rulekit/
     │   ├── .claude-plugin/
     │   │   └── plugin.json                   # name, version, keywords only
     │   ├── hooks/
-    │   │   └── hooks.json                    # PreToolUse (write + read), PostToolUse, SessionStart
+    │   │   └── hooks.json                    # PreToolUse (write + read), PostToolUse, Stop, UserPromptSubmit, SessionStart
     │   ├── bin/
     │   │   ├── write-rules-check.rb          # Edit/MultiEdit/Write engine
     │   │   ├── read-rules-check.rb           # Bash/Grep/Glob engine
     │   │   ├── post-write-sweep.rb           # replays write.yml over writes that bypassed the tools
+    │   │   ├── stop-rules-check.rb           # judges `judge:` rules over the turn's changes on Stop
+    │   │   ├── rules-rubric.rb               # sources + validate for /rules-compile
     │   │   └── clear-advisory-sentinels.sh   # SessionStart sentinel cleanup
     │   ├── lib/
-    │   │   └── rules_runner.rb               # shared matching, sentinels, output
+    │   │   ├── rules_runner.rb               # shared matching, sentinels, output
+    │   │   ├── working_tree.rb               # what changed on disk, for the sweep and the Stop hook
+    │   │   └── judge_client.rb               # optional `judge:` rules; the model backend lives here
     │   ├── commands/
     │   │   ├── rules-init.md                 # /rules-init <preset>
+    │   │   ├── rules-compile.md              # /rules-compile
     │   │   └── rules-test.md                 # /rules-test
+    │   ├── test/
+    │   │   ├── judge.sh                      # `judge:` rules and the Stop hook against a fake server
+    │   │   ├── rubric.sh                     # generated rubric files, sources and validate
+    │   │   └── fake_judge_server.rb
     │   ├── skills/
     │   │   └── sorbet-inline-rbs/
     │   │       └── SKILL.md                  # invoked by the dormant Sorbet rule
