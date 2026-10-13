@@ -51,13 +51,22 @@ class RulesRunner
   # a generated rule is switched off: /rules-compile keeps the flag when it
   # rewrites the rubric.
   def self.load_rules(project_dir, kind)
-    rules = ['_rubric', ''].each_with_object({}) do |suffix, merged|
+    enabled(all_rules(project_dir, kind))
+  end
+
+  # The same hash with the switched-off rules still in it, for a caller that
+  # lays these rules over others before dropping them.
+  def self.all_rules(project_dir, kind)
+    ['_rubric', ''].each_with_object({}) do |suffix, merged|
       path = rules_file(project_dir, kind, suffix)
       next if path.nil?
 
       loaded = YAML.safe_load_file(path)
       merged.merge!(loaded) if loaded.is_a?(Hash)
     end
+  end
+
+  def self.enabled(rules)
     rules.reject { |_, rule| disabled?(rule) }
   end
 
@@ -100,6 +109,7 @@ class RulesRunner
     @blocks = []
     @warns = []
     @notices = []
+    @flags = []
     @sentinels = []
   end
 
@@ -146,11 +156,17 @@ class RulesRunner
     end
     return if pending.empty?
 
-    fired = judge.fired(pending.transform_values { |rule| rule['judge'] },
-                      relative_path: relative_path, new_content: new_content)
-    fired.each do |name|
+    verdicts = judge.verdicts(pending.transform_values { |rule| rule['judge'] },
+                              relative_path: relative_path, new_content: new_content)
+    verdicts.each do |name, probability|
       rule = pending[name]
-      record(name: name, rule: rule, detector_result: { context: "#{relative_path}: #{rule['context']}" })
+      context = "#{relative_path}: #{rule['context']}"
+
+      if probability >= threshold(rule['judge'], 'threshold', JudgeClient::DEFAULT_THRESHOLD)
+        record(name: name, rule: rule, detector_result: { context: context })
+      elsif rule['judge'].key?('flag') && probability >= threshold(rule['judge'], 'flag', 1.0)
+        @flags << "[#{name}] #{context} (scored #{probability.round(2)})"
+      end
     end
   end
 
@@ -263,15 +279,17 @@ class RulesRunner
   def emit!
     touch_sentinels if @blocks.any? || @warns.any? || @notices.any?
 
-    if @blocks.any?
-      puts JSON.generate(block_payload)
-      exit(pre_tool_use? ? 2 : 0)
-    elsif @warns.any?
-      puts JSON.generate(hookSpecificOutput: { hookEventName: @event, additionalContext: @warns.join("\n\n") })
-    elsif @notices.any?
-      puts JSON.generate(systemMessage: "rulekit: left unresolved this turn\n\n#{@notices.join("\n\n")}")
-    end
-    exit 0
+    payload = if @blocks.any?
+                block_payload
+              elsif @warns.any?
+                { hookSpecificOutput: { hookEventName: @event, additionalContext: @warns.join("\n\n") } }
+              else
+                {}
+              end
+    payload[:systemMessage] = system_message if @notices.any? || @flags.any?
+
+    puts JSON.generate(payload) unless payload.empty?
+    exit(@blocks.any? && pre_tool_use? ? 2 : 0)
   end
 
   private
@@ -279,6 +297,20 @@ class RulesRunner
   # Built on first use, and only ever by the Stop hook.
   def judge
     @judge ||= JudgeClient.from_env(session_dir: @session_dir)
+  end
+
+  # A `judge:` threshold, or `default` when it is absent or not a number.
+  def threshold(config, key, default)
+    Float(config.fetch(key, default), exception: false) || default
+  end
+
+  # What goes to the user and not the agent: findings the turn ran out of
+  # continuations for, and `judge:` scores in the flag band.
+  def system_message
+    [
+      (["rulekit: left unresolved this turn", *@notices].join("\n\n") if @notices.any?),
+      (["rulekit: possible rule violations, scored below the threshold to act on", *@flags].join("\n\n") if @flags.any?),
+    ].compact.join("\n\n")
   end
 
   def pre_tool_use?

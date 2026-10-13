@@ -268,6 +268,31 @@ migration_backfill_semantic:
   context: Split the backfill into its own migration.
 ```
 
+A question can say more than that:
+
+| `judge:` key | Does |
+|---|---|
+| `criteria` | For a yes/no question, a `true` and a `false` example sent with it |
+| `flag` | A second, lower bar. A score from `flag` up to `threshold` goes to you as a `systemMessage`; the agent is not told. Unset, anything under `threshold` is silent |
+| `type: choice` | Asks which of the options in `criteria` (a map of name to description) applies. `violating` lists the ones that break the rule |
+| `type: score` | Asks where on the ordered levels in `criteria` (a list, best first, at most 10) the change sits. `violating_from` is the index of the first level that breaks the rule |
+
+For `choice` and `score` the probability held against `threshold` is the weight the judge put on the violating answers:
+
+```yaml
+comment_restates_code:
+  type: warn
+  files: ["app/**/*.rb"]
+  pattern: '#'
+  judge:
+    type: score
+    question: "How much does a comment added here restate the code beside it?"
+    criteria: ["not at all", "in passing", "line for line"]
+    violating_from: 2
+    flag: 0.5
+  context: Say why, not what.
+```
+
 The judge may be a paid network call, so a `judge:` rule is skipped on every edit and judged once, on `Stop`, over what the turn changed:
 
 ```
@@ -310,6 +335,45 @@ What is sent, and what happens when the judge is down, is under [Cost, privacy, 
 
 `spec/judge_spec.rb` exercises all of this against a fake server, so it runs without a key.
 
+### Abide rubrics (optional)
+
+[Abide](https://github.com/coldteadotai/abide) compiles the same instruction files into `.abide/rubric.json`, where every model-checked rule is a question for the same judge. Set one variable and the Stop hook asks those questions too, beside your own `judge:` rules and in the same request per file:
+
+```
+export RULEKIT_ABIDE_RUBRIC=1
+```
+
+| `RULEKIT_ABIDE_RUBRIC` | Reads |
+|---|---|
+| unset, empty, `0`, `false`, `no`, `off` | nothing. This is the default |
+| `1`, `true`, `yes`, `on` | `<project>/.abide/rubric.json` |
+| anything else | that path, absolute or relative to the project |
+
+Each rule is read as a `block` rule with a `judge:` block:
+
+| Abide | Becomes |
+|---|---|
+| `id` | the rule's name |
+| `scope`, or every file when absent | `files` |
+| `check.question`: `boolean`, `choice` or `score`, with its `criteria` | `judge.question`, `type` and `criteria` |
+| `violating`, `violatingFrom` | `judge.violating`, `violating_from` |
+| `thresholds.act`, 0.8 by default | `judge.threshold` |
+| `thresholds.flag`, 0.5 by default | `judge.flag` |
+| `text` and `source` | `context`, as `<text> (<path>:<line>)` |
+
+- **Only the Stop hook reads it.** The per-edit hooks and the sweep never see these rules, and rulekit never writes to the rubric. Compiling, calibrating and tuning it stay Abide's job.
+- **It uses rulekit's judge settings**, so it needs the key or URL [above](#semantic-rules-with-a-judge-optional). `TYPESAFE_AI_API_KEY` in the environment is enough; Abide's `~/.abide/.env` and its global rubric are not read.
+- **Some rules are left out:** `lint`, `deferred` and `unenforceable` checks, and any rule whose `status` is not `active`.
+- **Banded like Abide.** At `thresholds.act` and above the agent is sent back. From `flag` up to `act` you get a note and the agent does not. Below `flag`, nothing.
+- **`when` is ignored.** An `edit` rule and a `turn` rule are both asked once per changed file, about the lines the turn added to it. A `turn` rule that needs the whole diff or the prompt ("did this add more than was asked") is answering with less than Abide gives it.
+- **Globs are Ruby's, not picomatch's.** `**/*.ts` means the same in both; a brace set like `*.{ts,tsx}` or a `!` negation does not match here.
+- **A `write.yml` rule of the same name wins**, and a missing, malformed or other-version rubric is ignored.
+- **Switching one off.** Abide's own `status` is respected: anything but `active` is skipped. To switch a rule off from rulekit's side without touching the rubric, add its `id` to `write.yml` with only `enabled: false`. `enabled` inside `rubric.json` is not read, since Abide would drop it on the next compile.
+
+Running Abide's own hooks as well would ask each question twice. Use this instead of `abide init`, not on top of it.
+
+`spec/abide_rubric_spec.rb` covers it against the same fake server.
+
 ## block, warn, and block_once
 
 | Type | Behaviour |
@@ -339,7 +403,7 @@ PreToolUse(Edit|Write)  →  rules see the content about to be written
 PostToolUse(*)          →  rules see the lines that did get written
 ```
 
-**How it decides what is new.** `git status` supplies the candidate set — cheap, and it honours `.gitignore`. Content comes from a per session snapshot of each file's last seen state under `tmp/.claude-advisory/<session_id>/snapshots/`, so `new_content` is the lines that one tool call added: not the whole file, and not the whole branch diff. A tracked file with no snapshot yet falls back to its `HEAD` version, so a one line `sed` into a committed file does not re-flag everything already in it. Writing the snapshot back is also what stops a rule re-firing on every later tool call — once swept, a file shows no delta until it changes again.
+**How it decides what is new.** `git status` supplies the candidate set — cheap, and it honours `.gitignore`. Content comes from a per session snapshot of each file's last seen state under `tmp/.claude-advisory/<session_id>/snapshots/`, so `new_content` is the lines that one tool call added: not the whole file, and not the whole branch diff. A tracked file with no snapshot yet falls back to its `HEAD` version, so a one line `sed` into a committed file does not re-flag everything already in it. Writing the snapshot back is also what stops a rule re-firing on every later tool call — once swept, a file shows no delta until it changes again. A snapshot is dropped once git stops calling its file dirty, because it was deleted, committed or reverted, so the same lines written again are checked again.
 
 **What it deliberately ignores.**
 
@@ -365,7 +429,7 @@ The sweep is not a substitute for the pre-write hooks; catching a write before i
 
 - **Deterministic rules send nothing anywhere.** Glob, regex and detector rules run locally and need no key.
 - **The judge is opt in.** With no key and no URL set, nothing is sent and `judge:` rules stay silent.
-- **What the judge sees:** the file path and the lines the turn added to that file, cut at 8000 characters, and only for files a `judge:` rule covers. Never the conversation. Leave `judge:` off rules that cover files you would not send to a third party.
+- **What the judge sees:** the file path and the lines the turn added to that file, cut at 8000 characters, and only for files a `judge:` rule covers. With `RULEKIT_ABIDE_RUBRIC` on, an unscoped Abide rule covers every file. Never the conversation. Leave `judge:` off rules that cover files you would not send to a third party.
 - **What it costs:** one request per changed file per turn, carrying every matching `judge:` rule as a question. A rule's `pattern` runs first, so the judge is only asked when it could matter.
 - **It fails open.** An unreachable judge, a timeout or a bad response leaves `judge:` rules silent, and the judge is marked down for 60 seconds so an outage costs one attempt, not one per file.
 - **The model is yours to choose.** The default is [Jev](https://typesafe.ai), TypeSafe's hosted decision model. Any server that speaks the same protocol works by setting `RULEKIT_JUDGE_URL`.
@@ -378,7 +442,7 @@ The sweep is not a substitute for the pre-write hooks; catching a write before i
 | `PreToolUse` on `Bash`, `Grep`, `Glob`, `Read` | `tool-rules-check.rb` | Tool rules against the command, search or path |
 | `PostToolUse` on every tool | `post-write-sweep.rb` | The same write rules against what changed on disk |
 | `UserPromptSubmit` | `stop-rules-check.rb --record` | Records the working tree, so your own edits between turns are not judged |
-| `Stop` | `stop-rules-check.rb` | `judge:` rules against what the turn added |
+| `Stop` | `stop-rules-check.rb` | `judge:` rules against what the turn added, and an [Abide rubric](#abide-rubrics-optional) when switched on |
 | `SessionStart` | cleanup, then both recorders | Clears the session's "once" sentinels and records the starting state |
 
 ## Also in this marketplace: exhalekit
@@ -420,7 +484,8 @@ claude-rulekit/
     │   ├── lib/
     │   │   ├── rules_runner.rb               # shared matching, sentinels, output
     │   │   ├── working_tree.rb               # what changed on disk, for the sweep and the Stop hook
-    │   │   └── judge_client.rb               # optional `judge:` rules; the model backend lives here
+    │   │   ├── judge_client.rb               # optional `judge:` rules; the model backend lives here
+    │   │   └── abide_rubric.rb               # optional: an Abide rubric read as `judge:` rules on Stop
     │   ├── commands/
     │   │   ├── rules-init.md                 # /rules-init <preset>
     │   │   ├── rules-compile.md              # /rules-compile
@@ -428,6 +493,7 @@ claude-rulekit/
     │   ├── Gemfile                           # rspec, for the suite only; the hooks need no gems
     │   ├── spec/                             # bundle exec rspec
     │   │   ├── judge_spec.rb                 # `judge:` rules and the Stop hook against a fake server
+    │   │   ├── abide_rubric_spec.rb          # an Abide rubric judged on Stop
     │   │   ├── rubric_spec.rb                # generated rubric files, sources and validate
     │   │   ├── presets/
     │   │   │   └── rails_spec.rb             # every preset rule fires/stays silent, and the sweep

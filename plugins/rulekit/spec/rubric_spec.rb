@@ -340,7 +340,7 @@ RSpec.describe 'rubric files' do
         no_files:
           type: warn
           pattern: '(unclosed'
-          judge: { threshold: 3 }
+          judge: { threshold: 3, flag: -1, type: ranking }
           context: x
           text: x
           source: "elsewhere.md:1"
@@ -361,6 +361,30 @@ RSpec.describe 'rubric files' do
           type: warn
           files: ["**/*"]
           judge: { question: "q" }
+          context: x
+          text: x
+          source: "CLAUDE.md:1"
+
+        bad_choice:
+          type: warn
+          files: ["lib/**/*"]
+          judge: { type: choice, question: "q", criteria: { a: x, b: y }, violating: [a, b] }
+          context: x
+          text: x
+          source: "CLAUDE.md:1"
+
+        bad_score:
+          type: warn
+          files: ["lib/**/*"]
+          judge: { type: score, question: "q", criteria: [good, bad], violating_from: 0 }
+          context: x
+          text: x
+          source: "CLAUDE.md:1"
+
+        good_score:
+          type: warn
+          files: ["lib/**/*"]
+          judge: { type: score, question: "q", criteria: [good, bad], violating_from: 1, flag: 0.5 }
           context: x
           text: x
           source: "CLAUDE.md:1"
@@ -396,6 +420,10 @@ RSpec.describe 'rubric files' do
         'no_files: pattern is not a valid Ruby regex',
         'no_files: judge.question is empty',
         'no_files: judge.threshold must be a number between 0 and 1',
+        'no_files: judge.flag must be a number between 0 and 1',
+        'no_files: judge.type "ranking" is not choice or score',
+        'bad_choice: judge.violating must name some, not all, of the options',
+        'bad_score: judge.violating_from must be the index of a level after the first',
         'no_files: source elsewhere.md is not listed',
         'no_provenance: type must be one of block, block_once, warn',
         'no_provenance: text is missing',

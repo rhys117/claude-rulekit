@@ -2,6 +2,7 @@
 #
 # Covers: the per-edit hooks leave `judge:` rules alone, Stop judges what the
 # turn changed in one request per file, thresholds and the `pattern` prefilter,
+# criteria, choice and score questions, the flag band,
 # block vs warn output, an unchanged tree is not asked about twice, edits made
 # between turns are not judged, the per-turn continuation cap, the env names
 # and their TypeSafe fallbacks, and failing open when unconfigured or
@@ -134,6 +135,33 @@ RSpec.describe 'judge rules' do
       expect { expect(project.stop('s2')).to be_silent }.not_to(change { judge.requests.size })
     end
 
+    it 'judges a deleted file again when the same content is written back' do
+      project.record('s2')
+      add 'db/migrate/002_x.rb', 'User.find_each { backfill slug }'
+      expect(project.stop('s2')).to fire('semantic_backfill')
+
+      FileUtils.rm(project.path('db/migrate/002_x.rb'))
+      project.record('s2')
+      add 'db/migrate/002_x.rb', 'User.find_each { backfill slug }'
+
+      expect { expect(project.stop('s2')).to fire('semantic_backfill') }.to change { judge.requests.size }.by(1)
+    end
+
+    it 'judges a reverted tracked file again when the same change is made again' do
+      project.write('db/migrate/002_x.rb', "add_index :users, :email\n")
+      project.git_commit_all('migration')
+      project.record('s2')
+      add 'db/migrate/002_x.rb', 'User.find_each { backfill slug }'
+      expect(project.stop('s2')).to fire('semantic_backfill')
+
+      project.write('db/migrate/002_x.rb', "add_index :users, :email\n")
+      project.record('s2')
+      add 'db/migrate/002_x.rb', 'User.find_each { backfill slug }'
+
+      expect(project.stop('s2')).to fire('semantic_backfill')
+      expect(judge.requests.last.state).not_to include('add_index'), 'only the lines added since HEAD are sent'
+    end
+
     it 'returns a warn rule as feedback, skips a pattern miss, and ignores edits made between turns' do
       project.record('s2')
       add 'db/migrate/004_user_edit.rb', 'backfill by hand'
@@ -147,6 +175,93 @@ RSpec.describe 'judge rules' do
       expect(out.stdout).not_to include('"decision"'), 'warn rule does not block'
       expect(judge.requests.size).to eq(1), 'edits made between turns are not judged'
       expect(judge.requests.last.questions).not_to have_key('prefiltered'), 'pattern miss is not asked'
+    end
+
+    describe 'beyond a bare yes/no' do
+      before do
+        project.rules('write.yml', <<~YAML)
+          with_criteria:
+            type: block
+            files: ["lib/**/*"]
+            judge:
+              question: "Does this backfill?"
+              flag: 0.5
+              criteria:
+                true: "find_each with update"
+                false: "add_index"
+            context: yes or no
+
+          logs_to_stdout:
+            type: warn
+            files: ["lib/**/*"]
+            judge:
+              type: choice
+              question: "Where does it log?"
+              criteria:
+                stdout: "puts or print"
+                logger: "Rails.logger"
+              violating: [stdout]
+            context: Use the logger.
+
+          restates_code:
+            type: warn
+            files: ["lib/**/*"]
+            judge:
+              type: score
+              question: "How much does this comment restate the code?"
+              criteria: ["not at all", "in passing", "line for line"]
+              violating_from: 2
+            context: Say why, not what.
+
+          half_a_choice:
+            type: block
+            files: ["lib/**/*"]
+            judge:
+              type: choice
+              question: "Which?"
+            context: never asked
+        YAML
+        project.record('s5')
+      end
+
+      it 'sends criteria with the question, and each shape as its own type' do
+        add 'lib/x.rb', 'backfill'
+
+        out = project.stop('s5')
+
+        expect(out).to fire('with_criteria')
+        expect(out).to fire('logs_to_stdout')
+        expect(out).to fire('restates_code')
+        questions = judge.requests.last.questions
+        expect(questions['with_criteria']).to eq(
+          'type' => 'noul', 'instructions' => 'Does this backfill?',
+          'criteria' => { 'true' => 'find_each with update', 'false' => 'add_index' }
+        )
+        expect(questions.dig('logs_to_stdout', 'type')).to eq('choice')
+        expect(questions.dig('restates_code', 'criteria')).to eq(['not at all', 'in passing', 'line for line'])
+        expect(questions).not_to have_key('half_a_choice'), 'a choice with no options is not asked'
+      end
+
+      it 'notes a score between flag and threshold for the user, only on a rule that sets flag' do
+        add 'lib/x.rb', 'borderline'
+
+        out = project.stop('s5')
+
+        expect(out.stdout).to include('"systemMessage"')
+        expect(out.stdout).to include('[with_criteria] lib/x.rb: yes or no (scored 0.6)')
+        expect(out.stdout).not_to include('logs_to_stdout'), 'a rule with no flag stays silent below its threshold'
+        expect(out.stdout).not_to include('"decision"')
+      end
+
+      it 'sends a flag note alongside a finding' do
+        add 'lib/x.rb', 'backfill'
+        add 'lib/y.rb', 'borderline'
+
+        out = project.stop('s5')
+
+        expect(out.stdout).to include('"decision":"block"')
+        expect(out.stdout).to include('[with_criteria] lib/y.rb: yes or no (scored 0.6)')
+      end
     end
 
     it 'keeps one turn open at most twice, then tells the user instead' do

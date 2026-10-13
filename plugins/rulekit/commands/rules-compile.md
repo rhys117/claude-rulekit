@@ -172,6 +172,32 @@ everything and never fires, and the user reads that silence as good news.
   It runs first and costs nothing, so the judge is only asked when it could
   say yes.
 
+Three optional keys sharpen a question. Reach for them only when the plain
+form scores in the middle:
+
+```yaml
+judge:
+  question: "Does this change add a comment that restates what the line below it does?"
+  criteria:           # one concrete example of each answer
+    true: "# increment the counter, above counter += 1"
+    false: "# retries are capped because the API bans on the sixth"
+  flag: 0.5           # from here up to the threshold, the user gets a note and the agent does not
+```
+
+When the instruction has more than two outcomes, ask for the outcome and say
+which ones break the rule. The rule is then measured by the weight on those:
+
+```yaml
+judge:                                judge:
+  type: choice                          type: score
+  question: "Where does it log?"        question: "How much does this restate the code?"
+  criteria:                             criteria:        # best first, 2 to 10 levels
+    logger: "Rails.logger"                - "not at all"
+    stdout: "puts or print"               - "in passing"
+    none: "nothing is logged"             - "line for line"
+  violating: [stdout]                   violating_from: 2
+```
+
 The judge is optional for the user. Without one configured these rules stay
 silent, so never use `judge` for something a pattern or detector decides.
 
