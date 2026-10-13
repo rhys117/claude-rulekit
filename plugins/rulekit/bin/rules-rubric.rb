@@ -210,6 +210,9 @@ class RubricFile
     end
 
     validate_provenance(rule_name, rule)
+    %w[files exclude].each do |key|
+      issue rule_name, "#{key} must be a list of globs" if rule.key?(key) && !rule[key].is_a?(Array)
+    end
     validate_pattern(rule_name, rule)
     validate_detector(rule_name)
     issue rule_name, 'context is empty, so the rule can never fire' if rule['context'].to_s.strip.empty?

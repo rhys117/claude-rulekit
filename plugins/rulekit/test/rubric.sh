@@ -4,6 +4,7 @@
 # Covers: write_rubric.yml and read_rubric.yml are loaded by all four hooks
 # beside the hand-written files, a hand-written rule wins a name clash, the
 # `_rubric` metadata is never treated as a rule, read rules honour `pattern`,
+# `exclude` carves a path out of a rule on both sides,
 # `sources` finds instruction files and reports staleness, and `validate`
 # accepts a good rubric and names what is wrong with a bad one.
 #
@@ -52,6 +53,7 @@ _rubric:
 no_default_scope:
   type: block
   files: ["app/models/**/*.rb"]
+  exclude: ["app/models/legacy/**/*"]
   pattern: '(?<!\w)default_scope(?!\w)'
   context: Default scopes are not allowed.
   text: "We do not allow default scopes."
@@ -147,6 +149,9 @@ OUT=$(write_event app/models/x.rb 'scope :active' | "$W")
 assert_silent "write_rubric pattern miss stays silent" "$OUT"
 assert_not_contains "metadata is never a rule" "$(write_event app/models/x.rb 'default_scope' | "$W")" "_rubric"
 
+OUT=$(write_event app/models/legacy/x.rb 'default_scope { }' | "$W")
+assert_silent "exclude carves a path out of a write rule" "$OUT"
+
 OUT=$(write_event lib/x.rb 'anything' | "$W"); EC=$?
 assert_contains "hand-written rule wins a name clash" "$OUT" "hand-written version"
 assert_not_contains "shadowed rubric rule does not run" "$OUT" "rubric version"
@@ -159,6 +164,12 @@ OUT=$(bash_event 'pnpm install left-pad' | "$R")
 assert_silent "read pattern miss stays silent" "$OUT"
 OUT=$(echo '{"tool_name":"Grep","session_id":"r1","tool_input":{"pattern":"npm install","path":"docs"}}' | "$R")
 assert_silent "read rule keeps to its tools" "$OUT"
+
+printf '%s\n' 'no_legacy:' '  type: warn' '  tools: [Read]' '  files: ["legacy/**/*"]' '  exclude: ["legacy/README.md"]' '  context: legacy is deprecated' > "$RULES/read.yml"
+read_event() { echo '{"tool_name":"Read","session_id":"r1","tool_input":{"file_path":"'"$SMOKE/$1"'"}}'; }
+assert_contains "read rule fires inside its files" "$(read_event legacy/a.rb | "$R")" "[no_legacy]"
+assert_silent "exclude carves a path out of a read rule" "$(read_event legacy/README.md | "$R")"
+rm "$RULES/read.yml"
 
 echo '{"session_id":"r1"}' | "$S" --bootstrap
 sleep 1.1; echo 'default_scope { where(x: 1) }' > "$SMOKE/app/models/y.rb"
@@ -219,6 +230,7 @@ no_files:
 no_provenance:
   type: deny
   files: ["**/*"]
+  exclude: "lib/**/*"
 
 bad_detector:
   type: warn
@@ -245,6 +257,7 @@ assert_contains "source must be listed" "$OUT" "no_files: source elsewhere.md is
 assert_contains "unknown type" "$OUT" "no_provenance: type must be one of block, block_once, warn"
 assert_contains "text is required" "$OUT" "no_provenance: text is missing"
 assert_contains "context is required" "$OUT" "no_provenance: context is empty"
+assert_contains "exclude must be a list" "$OUT" "no_provenance: exclude must be a list of globs"
 assert_contains "detector must load" "$OUT" "bad_detector: detectors/bad_detector.rb does not load or does not define Detectors::BadDetector.call"
 assert_contains "read rules have no block_once" "$OUT" "read_rubric.yml: judged_read: type must be one of block, warn"
 assert_contains "read rules have no judge" "$OUT" "judged_read: judge is not supported on read rules"

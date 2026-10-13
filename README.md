@@ -78,6 +78,7 @@ no_default_scope:
 |---|---|---|
 | `type` | all | `block`, `block_once`, or `warn`. |
 | `files` | write, read | Path globs (`**` supported). On write, the file being edited; on read, the path the tool touches (the `Read` file, or a `Grep`/`Glob` path). |
+| `exclude` | write, read | Optional path globs. A path matching one is left alone, for "everywhere except here". |
 | `pattern` | write, read | Optional Ruby regex. On write, matched against the new content. On read, against what the tool was asked for: the `Bash` command, the `Grep`/`Glob` search pattern, the `Read` path. Omit to fire on the other matches alone. |
 | `tools` | read | Optional list of tool names. Defaults to `[Bash, Grep, Glob]`; add `Read` to fire when the agent opens a file. |
 | `judge` | write | Optional. Ask a [model](#semantic-rules-with-a-judge-optional) a yes/no question when the agent finishes its turn, instead of firing on the match alone. |

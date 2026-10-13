@@ -93,7 +93,7 @@ class RulesRunner
     rules.each do |name, rule|
       next unless rule.is_a?(Hash)
       next unless RULE_TYPES.include?(rule['type'])
-      next unless matches_globs?(Array(rule['files']), relative_path, file_path)
+      next unless applies_to?(rule, relative_path, file_path)
       next unless matches_pattern?(rule, name, new_content)
 
       detector = load_detector(name)
@@ -121,7 +121,7 @@ class RulesRunner
   # detector file is not asked about: the detector already decided pre-write.
   def apply_stop_rules(rules, file_path:, relative_path:, new_content:)
     pending = stop_rules(rules).select do |name, rule|
-      matches_globs?(Array(rule['files']), relative_path, file_path) && matches_pattern?(rule, name, new_content)
+      applies_to?(rule, relative_path, file_path) && matches_pattern?(rule, name, new_content)
     end
     return if pending.empty?
 
@@ -156,6 +156,12 @@ class RulesRunner
     @notices = @blocks + @warns
     @blocks = []
     @warns = []
+  end
+
+  # True when the path is inside the rule's `files` and outside its `exclude`.
+  def applies_to?(rule, relative_path, file_path)
+    matches_globs?(Array(rule['files']), relative_path, file_path) &&
+      !matches_globs?(Array(rule['exclude']), relative_path, file_path)
   end
 
   # True when any glob matches the path, tried both project-relative and

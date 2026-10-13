@@ -23,7 +23,10 @@ edit `write.yml`, `read.yml` or an existing detector that is not yours.
 
 Run `ruby "${CLAUDE_PLUGIN_ROOT}/bin/rules-rubric.rb" sources` from the project
 root. It lists each instruction file, the glob its rules apply to, and its
-sha256. If it finds none, tell the user there is nothing to compile and stop.
+sha256. The tag at the end of each line and the closing `status:` line compare
+the file with the last compile (`new`, `changed`, `unchanged`, `gone`); they
+are for the person, and you compile every listed file either way. If it finds
+no sources, tell the user there is nothing to compile and stop.
 
 Read every listed file in full. Then:
 
@@ -39,14 +42,22 @@ Read every listed file in full. Then:
 
 ## Step 2. Extract every statement that instructs
 
-Go through each file top to bottom. A rule is a sentence that tells the agent
-to do or not do something. Headings, background and rationale are not rules,
-but they often say what a rule is for and belong in its `context`.
+Go through each file top to bottom. An instruction is one thing the agent is
+told to do or not do, that could be kept or broken on its own.
+
+- Count instructions, not bullets. A bullet that says "never accept the key as
+  a flag, and never log it" is two, and both carry the same `source` line.
+- One idea said twice is one instruction. Compile it once and quote the
+  clearest wording.
+- Headings, taglines, rationale and questions to "ask yourself" are not
+  instructions. They often say what one is for and belong in its `context`.
+- A description is not an instruction. "This is a pnpm monorepo" tells the
+  agent nothing to do; "always use pnpm" does. Do not infer the second from the
+  first.
 
 For each one capture the user's own words, trimmed to a sentence or two, and
 the file and line. Keep any code block beside it: a worked example carries more
-signal than the prose. Do not merge two rules because they share a heading. Do
-not split one idea in two.
+signal than the prose.
 
 ## Step 3. Give each rule the cheapest shape that decides it
 
@@ -55,27 +66,33 @@ act before the write; later ones cost more and know less.
 
 | # | Question | Shape | Lands in |
 |---|---|---|---|
-| 1 | Is it about what the agent runs, searches for or opens? ("use pnpm, never npm", "check schema.rb before searching", "do not read `legacy/`") | read rule: `tools` + `pattern` and/or `files` | `read_rubric.yml` |
-| 2 | Does it hold for a place rather than for particular code? ("never edit `db/schema.rb` by hand", "services coordinate several models") | write rule on `files` alone | `write_rubric.yml` |
-| 3 | Can a regex over the new code decide it exactly? (`default_scope`, `console.log`, `interface Foo`, `binding.pry`) | write rule with `pattern` | `write_rubric.yml` |
-| 4 | Does it need counting, measuring, or a look at another file in the repo, and would a few lines of Ruby decide it exactly? (line caps, "a uniqueness validation needs a unique index") | write or read rule + detector | rubric + `detectors/<name>.rb` |
+| 1 | Is it about what the agent runs, searches for or opens? ("use pnpm, never npm", "no AI attribution in commits", "check schema.rb before searching", "do not read `legacy/`") | read rule: `tools` + `pattern` and/or `files` | `read_rubric.yml` |
+| 2 | Can a regex over the new code decide it exactly? (`default_scope`, `console.log`, `interface Foo`, `binding.pry`) | write rule with `pattern` | `write_rubric.yml` |
+| 3 | Would a few lines of Ruby decide it exactly, where a regex cannot: counting, measuring, or a look at another file in the repo? (line caps, "a uniqueness validation needs a unique index") | write or read rule + detector | rubric + `detectors/<name>.rb` |
+| 4 | Is it about a place rather than about particular code? ("never edit `db/schema.rb` by hand", "services coordinate several models") | write rule on `files` alone | `write_rubric.yml` |
 | 5 | Could a reviewer decide it from the lines added to one file and nothing else? (a comment that restates the code, raw error text reaching a user, a hand-rolled retry loop) | write rule with `judge` | `write_rubric.yml` |
 | 6 | None of the above. | not a rule | `_rubric.skipped`, with the reason |
 
-What ends up in 6: rules about the change as a whole (scope creep, an
-abstraction with one caller), rules about the conversation ("ask when unsure",
-"state a plan"), rules that need an understanding of the whole codebase, and
-rules already covered by a hand-written rule (name it in the reason).
+What ends up in 6: instructions about the change as a whole (scope creep, an
+abstraction with one caller), about the conversation ("ask when unsure", "state
+a plan"), ones that need an understanding of the whole codebase, ones that
+compare the new code with what was there before, and ones already covered by a
+hand-written rule (name it in the reason).
 
-Every statement lands somewhere. Count them: the report at the end is those
+A rule sees only what is being written, never the previous version. A detector
+can read the file on disk, which before an edit is still the old content.
+
+Every instruction lands somewhere. Count them: the report at the end is those
 counts.
 
 ### Choosing `type`
 
-| The user's wording, and how sure the match is | `type` |
+What decides it is how sure the match is, then how firm the wording is:
+
+| The match | `type` |
 |---|---|
-| "Never", "must not", and the match has no legitimate exception | `block` |
-| "Avoid", "prefer", "usually", or the match can be legitimate | `block_once` (denies once, lets the retry through) |
+| Exact, and the wording allows no exception ("never", "must not", a flat "use X, not Y") | `block` |
+| Can be legitimate, or the wording is soft ("avoid", "prefer", "usually") | `block_once` (denies once, lets the retry through) |
 | A reminder for a place, or anything decided by `judge` | `warn`, with `once_per_session: true` for place reminders |
 
 Read rules have no `block_once`. A `judge` answer is a probability: keep it to
@@ -93,6 +110,13 @@ A write rule **must** have `files`; without one it never matches. Use
 `["**/*"]` only when the rule truly applies everywhere, and prefer the
 narrowest extension or directory the user's text supports. Scope goes here,
 never in the wording of a pattern or question.
+
+### `exclude`
+
+Optional globs, same syntax, for "everywhere except here". "Define
+`assertNever` once in the schema package" is a pattern on the definition with
+`exclude: ["packages/schema/**/*"]`. Do not write a detector to carve out a
+path.
 
 ### `pattern`
 
@@ -291,15 +315,23 @@ Run `ruby "${CLAUDE_PLUGIN_ROOT}/bin/rules-rubric.rb" validate`. Fix every
 and either act on it or be sure it is what the user's rule means.
 
 Then feed each rule that has a `pattern` or a detector one payload that should
-fire and one that should not, exactly as `/rules-test` describes, with
-`CLAUDE_PROJECT_DIR` set to the project root:
+fire and one that should not, with `CLAUDE_PROJECT_DIR` set to the project
+root. Give every payload its own `session_id`: `block_once` and
+`once_per_session` rules fire once per session and then go quiet.
 
 ```bash
-echo '{"tool_name":"Write","session_id":"rules-compile","tool_input":{"file_path":"'"$PWD"'/app/models/x.rb","content":"default_scope { where(active: true) }"}}' \
+echo '{"tool_name":"Write","session_id":"rules-compile-1","tool_input":{"file_path":"'"$PWD"'/app/models/x.rb","content":"default_scope { where(active: true) }"}}' \
   | "${CLAUDE_PLUGIN_ROOT}/bin/write-rules-check.rb"
-echo '{"tool_name":"Bash","session_id":"rules-compile","tool_input":{"command":"npm install left-pad"}}' \
+echo '{"tool_name":"Bash","session_id":"rules-compile-2","tool_input":{"command":"npm install left-pad"}}' \
   | "${CLAUDE_PLUGIN_ROOT}/bin/read-rules-check.rb"
 ```
+
+Firing looks like this; passing prints nothing and exits 0:
+
+| `type` | Exit | stdout |
+|---|---|---|
+| `block`, `block_once` | 2 | JSON with `permissionDecision: "deny"` and the rule's name and `context` |
+| `warn` | 0 | JSON with `additionalContext` |
 
 A rule that fires on the good payload or stays silent on the bad one gets
 rewritten, or moved to `skipped` if it cannot be made exact. `judge` rules are
@@ -308,7 +340,8 @@ not sent anything. Remove `tmp/.claude-advisory/rules-compile*` when done.
 ## Step 7. Report
 
 Tell the user in a few plain sentences: how many instructions were found; how
-many became rules, split by shape (pattern, files only, detector, judge, read);
+many became rules, split by shape (pattern, files only, detector, judge, read;
+`validate` prints files-only rules as "match only");
 how many were skipped and the main reasons; whether any detectors were
 generated, since those are code they should read; and that `judge` rules only
 run once a judge is configured. Do not paste the rubric into the conversation.

@@ -11,6 +11,8 @@
 #                                     allow silently on retry (escape hatch).
 #                      "warn"       — inject context. Honours once_per_session.
 #   files:             Globs (relative to project root, ** supported).
+#   exclude:           Optional globs. A file matching one is left alone, for
+#                      "everywhere except here".
 #   pattern:           Optional Ruby regex matched against the new content.
 #                      Omit to fire on file-glob match alone.
 #   context:           Static message returned to Claude (may be overridden by
