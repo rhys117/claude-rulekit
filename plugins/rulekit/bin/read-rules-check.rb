@@ -92,6 +92,7 @@ rules.each do |name, rule|
   allowed_tools = DEFAULT_TOOLS if allowed_tools.empty?
   next unless allowed_tools.include?(tool)
 
+  # Unlike a write rule, a read rule without `files` applies to every path.
   unless Array(rule['files']).empty?
     next if target_path.empty?
     next unless runner.matches_globs?(Array(rule['files']), relative_path, target_path)

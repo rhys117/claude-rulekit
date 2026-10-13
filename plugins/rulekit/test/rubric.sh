@@ -194,6 +194,8 @@ assert_eq "good rubric exit" "$EC" "0"
 assert_contains "write summary counts shapes" "$OUT" "write_rubric.yml: 3 rules (1 pattern, 1 judge, 0 detector, 1 match only), 1 skipped"
 assert_contains "read summary" "$OUT" "read_rubric.yml: 1 rules (1 pattern"
 assert_contains "block on files alone is noted" "$OUT" "note:  write_rubric.yml: shadowed: blocks every edit"
+assert_contains "glob that matches no file is noted" "$OUT" "shadowed: files (lib/**/*) match nothing in the repo yet"
+assert_not_contains "glob that matches a file is not noted" "$OUT" "no_default_scope: files"
 
 OUT=$("$RUBRIC" sources)
 assert_contains "compiled source is unchanged" "$OUT" "CLAUDE.md  scope **/*  sha256 $(sha CLAUDE.md)  [unchanged]"
@@ -238,6 +240,14 @@ bad_detector:
   context: x
   text: x
   source: "CLAUDE.md:1"
+
+wide_judge:
+  type: warn
+  files: ["**/*"]
+  judge: { question: "q" }
+  context: x
+  text: x
+  source: "CLAUDE.md:1"
 YAML
 echo 'module Detectors; module Wrong; end; end' > "$RULES/detectors/bad_detector.rb"
 printf '%s\n' '_rubric:' '  sources:' "    - { path: CLAUDE.md, sha256: \"$(sha CLAUDE.md)\" }" \
@@ -249,6 +259,7 @@ assert_eq "bad rubric exit" "$EC" "1"
 assert_contains "missing source file" "$OUT" "source gone.md does not exist"
 assert_contains "incomplete skipped entry" "$OUT" "skipped[0] needs text, source and reason"
 assert_contains "name must be snake_case" "$OUT" "Bad-Name: name must be snake_case"
+assert_contains "judge on every file is noted" "$OUT" "wide_judge: asks the judge about every changed file"
 assert_contains "write rule needs files" "$OUT" "no_files: files is empty"
 assert_contains "pattern must compile" "$OUT" "no_files: pattern is not a valid Ruby regex"
 assert_contains "judge needs a question" "$OUT" "no_files: judge.question is empty"

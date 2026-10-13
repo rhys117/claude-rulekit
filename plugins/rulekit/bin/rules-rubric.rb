@@ -260,6 +260,7 @@ class RubricFile
     issue rule_name, 'files is empty; a write rule never matches without a glob (use ["**/*"] for everywhere)' if globs.empty?
     issue rule_name, 'tools is a read-rule key' if rule.key?('tools')
     validate_judge(rule_name, rule['judge']) if rule.key?('judge')
+    note_reach(rule_name, rule, globs)
 
     return unless shape(rule_name, rule) == 'match only'
 
@@ -268,6 +269,22 @@ class RubricFile
     elsif !rule['once_per_session'] && rule['type'] == 'warn'
       note rule_name, 'warns on every edit to its files; add once_per_session or a pattern'
     end
+  end
+
+  # The two ways a generated rule most often misses: globs that point at a
+  # directory that is not there, and a judge asked about every file.
+  def note_reach(rule_name, rule, globs)
+    if globs.any? && globs.grep(String).none? { |glob| matches_any_file?(glob) }
+      note rule_name, "files (#{globs.join(', ')}) match nothing in the repo yet; check the path"
+    end
+    return unless rule['judge'] && globs.include?('**/*')
+
+    note rule_name, 'asks the judge about every changed file; narrow files to where the rule applies'
+  end
+
+  def matches_any_file?(glob)
+    Dir.glob(glob, File::FNM_DOTMATCH, base: @root) { return true }
+    false
   end
 
   def validate_judge(rule_name, judge)
