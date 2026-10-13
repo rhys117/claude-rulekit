@@ -310,6 +310,42 @@ What is sent, and what happens when the judge is down, is under [Cost, privacy, 
 
 `spec/judge_spec.rb` exercises all of this against a fake server, so it runs without a key.
 
+### Abide rubrics (optional)
+
+[Abide](https://github.com/coldteadotai/abide) compiles the same instruction files into `.abide/rubric.json`, where every model-checked rule is a question for the same judge. Set one variable and the Stop hook asks those questions too, beside your own `judge:` rules and in the same request per file:
+
+```
+export RULEKIT_ABIDE_RUBRIC=1
+```
+
+| `RULEKIT_ABIDE_RUBRIC` | Reads |
+|---|---|
+| unset, empty, `0`, `false`, `no`, `off` | nothing. This is the default |
+| `1`, `true`, `yes`, `on` | `<project>/.abide/rubric.json` |
+| anything else | that path, absolute or relative to the project |
+
+Each rule is read as a `block` rule with a `judge:` block:
+
+| Abide | Becomes |
+|---|---|
+| `id` | the rule's name |
+| `scope`, or every file when absent | `files` |
+| `check.question.instructions`, with its `criteria` | `judge.question` |
+| `thresholds.act`, 0.8 by default | `judge.threshold` |
+| `text` and `source` | `context`, as `<text> (<path>:<line>)` |
+
+- **Only the Stop hook reads it.** The per-edit hooks and the sweep never see these rules, and rulekit never writes to the rubric. Compiling, calibrating and tuning it stay Abide's job.
+- **It uses rulekit's judge settings**, so it needs the key or URL [above](#semantic-rules-with-a-judge-optional). `TYPESAFE_AI_API_KEY` in the environment is enough; Abide's `~/.abide/.env` and its global rubric are not read.
+- **Some rules are left out:** `lint`, `deferred` and `unenforceable` checks, any rule whose `status` is not `active`, and `choice` and `score` questions, which the judge protocol here has no shape for.
+- **No flag band.** A rule fires at `thresholds.act` or stays silent; Abide's note to you between `flag` and `act` has no counterpart.
+- **`when` is ignored.** An `edit` rule and a `turn` rule are both asked once per changed file, about the lines the turn added to it. A `turn` rule that needs the whole diff or the prompt ("did this add more than was asked") is answering with less than Abide gives it.
+- **Globs are Ruby's, not picomatch's.** `**/*.ts` means the same in both; a brace set like `*.{ts,tsx}` or a `!` negation does not match here.
+- **A `write.yml` rule of the same name wins**, and a missing, malformed or other-version rubric is ignored.
+
+Running Abide's own hooks as well would ask each question twice. Use this instead of `abide init`, not on top of it.
+
+`spec/abide_rubric_spec.rb` covers it against the same fake server.
+
 ## block, warn, and block_once
 
 | Type | Behaviour |
@@ -365,7 +401,7 @@ The sweep is not a substitute for the pre-write hooks; catching a write before i
 
 - **Deterministic rules send nothing anywhere.** Glob, regex and detector rules run locally and need no key.
 - **The judge is opt in.** With no key and no URL set, nothing is sent and `judge:` rules stay silent.
-- **What the judge sees:** the file path and the lines the turn added to that file, cut at 8000 characters, and only for files a `judge:` rule covers. Never the conversation. Leave `judge:` off rules that cover files you would not send to a third party.
+- **What the judge sees:** the file path and the lines the turn added to that file, cut at 8000 characters, and only for files a `judge:` rule covers. With `RULEKIT_ABIDE_RUBRIC` on, an unscoped Abide rule covers every file. Never the conversation. Leave `judge:` off rules that cover files you would not send to a third party.
 - **What it costs:** one request per changed file per turn, carrying every matching `judge:` rule as a question. A rule's `pattern` runs first, so the judge is only asked when it could matter.
 - **It fails open.** An unreachable judge, a timeout or a bad response leaves `judge:` rules silent, and the judge is marked down for 60 seconds so an outage costs one attempt, not one per file.
 - **The model is yours to choose.** The default is [Jev](https://typesafe.ai), TypeSafe's hosted decision model. Any server that speaks the same protocol works by setting `RULEKIT_JUDGE_URL`.
@@ -378,7 +414,7 @@ The sweep is not a substitute for the pre-write hooks; catching a write before i
 | `PreToolUse` on `Bash`, `Grep`, `Glob`, `Read` | `tool-rules-check.rb` | Tool rules against the command, search or path |
 | `PostToolUse` on every tool | `post-write-sweep.rb` | The same write rules against what changed on disk |
 | `UserPromptSubmit` | `stop-rules-check.rb --record` | Records the working tree, so your own edits between turns are not judged |
-| `Stop` | `stop-rules-check.rb` | `judge:` rules against what the turn added |
+| `Stop` | `stop-rules-check.rb` | `judge:` rules against what the turn added, and an [Abide rubric](#abide-rubrics-optional) when switched on |
 | `SessionStart` | cleanup, then both recorders | Clears the session's "once" sentinels and records the starting state |
 
 ## Also in this marketplace: exhalekit
@@ -420,7 +456,8 @@ claude-rulekit/
     │   ├── lib/
     │   │   ├── rules_runner.rb               # shared matching, sentinels, output
     │   │   ├── working_tree.rb               # what changed on disk, for the sweep and the Stop hook
-    │   │   └── judge_client.rb               # optional `judge:` rules; the model backend lives here
+    │   │   ├── judge_client.rb               # optional `judge:` rules; the model backend lives here
+    │   │   └── abide_rubric.rb               # optional: an Abide rubric read as `judge:` rules on Stop
     │   ├── commands/
     │   │   ├── rules-init.md                 # /rules-init <preset>
     │   │   ├── rules-compile.md              # /rules-compile
@@ -428,6 +465,7 @@ claude-rulekit/
     │   ├── Gemfile                           # rspec, for the suite only; the hooks need no gems
     │   ├── spec/                             # bundle exec rspec
     │   │   ├── judge_spec.rb                 # `judge:` rules and the Stop hook against a fake server
+    │   │   ├── abide_rubric_spec.rb          # an Abide rubric judged on Stop
     │   │   ├── rubric_spec.rb                # generated rubric files, sources and validate
     │   │   ├── presets/
     │   │   │   └── rails_spec.rb             # every preset rule fires/stays silent, and the sweep

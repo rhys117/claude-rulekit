@@ -10,7 +10,7 @@ class Project
 
   # Variables a developer's shell may carry that would change what a hook does.
   CLEARED = %w[CLAUDE_RULES_DIR RULEKIT_JUDGE_URL RULEKIT_JUDGE_API_KEY RULEKIT_JUDGE_MODEL RULEKIT_JUDGE_TIMEOUT
-               TYPESAFE_AI_API_KEY TYPESAFE_AI_BASE_URL].to_h { |name| [name, nil] }.freeze
+               RULEKIT_ABIDE_RUBRIC TYPESAFE_AI_API_KEY TYPESAFE_AI_BASE_URL].to_h { |name| [name, nil] }.freeze
 
   # Snapshots go by mtime. Filesystems that keep whole seconds need a pause
   # before each write for a change to register; set this to 1.1 there.

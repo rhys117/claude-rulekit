@@ -27,12 +27,19 @@
 # After MAX_CONTINUATIONS of those in one turn, later findings go to the user
 # as a systemMessage and the turn is allowed to end.
 #
+# Abide rubrics
+# -------------
+# With RULEKIT_ABIDE_RUBRIC set, the model-checked rules of an Abide rubric
+# (lib/abide_rubric.rb) are judged here too, as `block` rules. Only this hook
+# reads them, and a write.yml rule of the same name wins.
+#
 # It stays silent — recording only — when the judge is not configured, when it
 # cannot be reached, on the first pass of a session, and when more than
 # WorkingTree::MAX_FILES files moved at once.
 
 require 'json'
 require 'fileutils'
+require_relative '../lib/abide_rubric'
 require_relative '../lib/rules_runner'
 require_relative '../lib/working_tree'
 
@@ -52,7 +59,7 @@ session_id = input['session_id'].to_s
 project_dir = ENV['CLAUDE_PROJECT_DIR'].to_s
 exit 0 if project_dir.empty?
 
-rules = RulesRunner.load_rules(project_dir, 'write')
+rules = AbideRubric.rules(project_dir).merge(RulesRunner.load_rules(project_dir, 'write'))
 runner = RulesRunner.from_env(
   script_name: 'stop-rules-check',
   project_dir: project_dir,
