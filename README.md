@@ -291,7 +291,7 @@ The judge is on once either the key or the URL is set. For Jev that means a key.
 
 What is sent, and what happens when the judge is down, is under [Cost, privacy, safety](#cost-privacy-safety).
 
-`test/judge.sh` exercises all of this against a fake server, so it runs without a key.
+`spec/judge_spec.rb` exercises all of this against a fake server, so it runs without a key.
 
 ## block, warn, and block_once
 
@@ -408,10 +408,13 @@ claude-rulekit/
     │   │   ├── rules-init.md                 # /rules-init <preset>
     │   │   ├── rules-compile.md              # /rules-compile
     │   │   └── rules-test.md                 # /rules-test
-    │   ├── test/
-    │   │   ├── judge.sh                      # `judge:` rules and the Stop hook against a fake server
-    │   │   ├── rubric.sh                     # generated rubric files, sources and validate
-    │   │   └── fake_judge_server.rb
+    │   ├── Gemfile                           # rspec, for the suite only; the hooks need no gems
+    │   ├── spec/                             # bundle exec rspec
+    │   │   ├── judge_spec.rb                 # `judge:` rules and the Stop hook against a fake server
+    │   │   ├── rubric_spec.rb                # generated rubric files, sources and validate
+    │   │   ├── presets/
+    │   │   │   └── rails_spec.rb             # every preset rule fires/stays silent, and the sweep
+    │   │   └── support/                      # throwaway project, hook runner, fake judge
     │   ├── skills/
     │   │   └── sorbet-inline-rbs/
     │   │       └── SKILL.md                  # invoked by the dormant Sorbet rule
@@ -427,7 +430,6 @@ claude-rulekit/
     │           │   ├── model_wrapper_delegation.rb
     │           │   ├── sorbet_inline_rbs_advisory.rb   # ready, rule ships commented out
     │           │   └── validates_uniqueness_no_index.rb
-    │           ├── test.sh                   # asserts every rule fires/stays silent
     │           └── README.md                 # per-rule table and the opinions encoded
     │
     └── exhalekit/                            # see its own README for detail
@@ -445,6 +447,14 @@ claude-rulekit/
 ```
 
 Only `presets/` is ever copied into your project. Everything else stays in the plugin and runs from there via `${CLAUDE_PLUGIN_ROOT}`, so plugins can be relocated without touching a single hook or command path.
+
+Rulekit's tests are RSpec, and drive the hooks the way Claude Code does: a JSON event on stdin, stdout and the exit code back.
+
+```
+cd plugins/rulekit
+bundle install
+bundle exec rspec
+```
 
 Adding a third plugin means a new directory under `plugins/` and one more entry in `marketplace.json`. Nothing at the root changes.
 

@@ -1,0 +1,4 @@
+source 'https://rubygems.org'
+
+# Development only. The hooks themselves run on the Ruby standard library.
+gem 'rspec', '~> 3.13'
