@@ -2,7 +2,8 @@
 # write-rules-check.rb - Enforce content + advisory rules on Edit/MultiEdit/Write.
 #
 # Reads stdin JSON from Claude Code and applies rules from
-# <project>/.claude/rules/write.yml (override the dir with CLAUDE_RULES_DIR).
+# <project>/.claude/rules/write.yml and the generated write_rubric.yml beside
+# it (override the dir with CLAUDE_RULES_DIR).
 # Each YAML rule:
 #
 #   type:              "block"      — deny tool call every time.
@@ -35,9 +36,10 @@
 #                                      enabling per-target once_per_session.
 #
 # If a YAML rule has no matching detector file the rule fires whenever its
-# files glob (and optional pattern) match — unless it has a `laya:` block
-# (question:, threshold:), in which case a local Laya server decides and the
-# rule stays silent when that server is unreachable. See lib/laya_client.rb.
+# files glob (and optional pattern) match — unless it has a `judge:` block
+# (question:, threshold:). That rule is not decided here at all:
+# stop-rules-check.rb asks the judge about it when the turn ends. See
+# lib/judge_client.rb.
 #
 # Block rules surface as hookSpecificOutput.permissionDecision = "deny"
 # (with permissionDecisionReason). Warn rules surface as additionalContext.
@@ -46,7 +48,6 @@
 # same rules on PostToolUse for writes that arrive any other way.
 
 require 'json'
-require 'yaml'
 require_relative '../lib/rules_runner'
 
 input = JSON.parse($stdin.read)
@@ -65,10 +66,7 @@ else exit 0
 end
 
 project_dir = ENV['CLAUDE_PROJECT_DIR'].to_s
-config_path = File.join(RulesRunner.rules_dir(project_dir), 'write.yml')
-exit 0 unless File.exist?(config_path)
-
-rules = YAML.safe_load_file(config_path) || {}
+rules = RulesRunner.load_rules(project_dir, 'write')
 exit 0 if rules.empty?
 
 relative_path = if !project_dir.empty? && file_path.start_with?("#{project_dir}/")

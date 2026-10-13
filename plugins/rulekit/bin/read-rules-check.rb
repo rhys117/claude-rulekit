@@ -2,7 +2,8 @@
 # read-rules-check.rb - Enforce advisory rules on Bash / Grep / Glob.
 #
 # Reads stdin JSON from Claude Code and applies rules from
-# <project>/.claude/rules/read.yml (override the dir with CLAUDE_RULES_DIR).
+# <project>/.claude/rules/read.yml and the generated read_rubric.yml beside it
+# (override the dir with CLAUDE_RULES_DIR).
 # Each YAML rule:
 #
 #   type:              "block" (deny tool call) or "warn" (inject context)
@@ -14,6 +15,10 @@
 #                      for Read, the search path for Grep/Glob. Omit to fire on
 #                      the tool match alone. Bash has no single path, so a rule
 #                      with `files` never matches a Bash call.
+#   pattern:           Optional Ruby regex matched against what the tool was
+#                      asked for: the command for Bash, the search pattern for
+#                      Grep/Glob, the file_path for Read. Omit to fire on the
+#                      tool (and files) match alone.
 #   context:           Static message returned to Claude (may be overridden by
 #                      a detector).
 #   once_per_session:  Optional, warn-only. When true the rule fires at most
@@ -36,14 +41,13 @@
 #                   :sentinel_suffix — appended to per-session sentinel key,
 #                                      enabling per-target once_per_session.
 #
-# If a YAML rule has no matching detector file the rule fires whenever the tool
-# match passes.
+# If a YAML rule has no matching detector file the rule fires whenever the
+# tool, files and pattern matches pass.
 #
 # Block rules surface as hookSpecificOutput.permissionDecision = "deny"
 # (with permissionDecisionReason). Warn rules surface as additionalContext.
 
 require 'json'
-require 'yaml'
 require_relative '../lib/rules_runner'
 
 # Tools this hook may fire on. Rules without an explicit `tools:` default to the
@@ -59,10 +63,7 @@ session_id = input['session_id'].to_s
 tool_input = input['tool_input'] || {}
 
 project_dir = ENV['CLAUDE_PROJECT_DIR'].to_s
-config_path = File.join(RulesRunner.rules_dir(project_dir), 'read.yml')
-exit 0 unless File.exist?(config_path)
-
-rules = YAML.safe_load_file(config_path) || {}
+rules = RulesRunner.load_rules(project_dir, 'read')
 exit 0 if rules.empty?
 
 # Path the tool touches, used for `files` globs: the file_path it reads, or the
@@ -74,6 +75,9 @@ relative_path = if !project_dir.empty? && target_path.start_with?("#{project_dir
                   target_path
 end
 fnmatch_flags = File::FNM_PATHNAME | File::FNM_DOTMATCH
+
+# What the tool was asked for, used for `pattern`.
+subject = (tool_input['command'] || tool_input['pattern'] || tool_input['file_path']).to_s
 
 runner = RulesRunner.from_env(script_name: 'read-rules-check', project_dir: project_dir, session_id: session_id)
 
@@ -97,6 +101,8 @@ rules.each do |name, rule|
     end
     next unless matched
   end
+
+  next unless runner.matches_pattern?(rule, name, subject)
 
   detector = runner.load_detector(name)
   result = detector ? detector.call(tool: tool, tool_input: tool_input, session_id: session_id, rule: rule) : true

@@ -8,6 +8,9 @@
 #   files:             Optional path globs matched against the file the tool
 #                      touches (file_path for Read, search path for Grep/Glob).
 #                      Omit to fire on the tool match alone.
+#   pattern:           Optional Ruby regex matched against what the tool was
+#                      asked for: the Bash command, the Grep/Glob search
+#                      pattern, the Read path.
 #   context:           Static message returned to Claude (may be overridden by
 #                      a detector).
 #   once_per_session:  Optional, warn-only. When true the rule fires at most

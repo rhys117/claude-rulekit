@@ -14,8 +14,8 @@
 #
 # How it finds changes
 # --------------------
-# `git status` supplies the candidate set (cheap, and it respects .gitignore).
-# Content comes from a per-session snapshot of each file's last-seen state
+# lib/working_tree.rb does the reading. `git status` supplies the candidate set
+# (cheap, and it respects .gitignore). Content comes from a per-session snapshot of each file's last-seen state
 # under tmp/.claude-advisory/<session_id>/snapshots/, so `new_content` is the
 # lines this one tool call added — not the whole file, and not the whole branch
 # diff. A tracked file with no snapshot yet falls back to its HEAD version, so
@@ -39,10 +39,8 @@
 # already landed and cannot be denied. Warn rules surface as additionalContext.
 
 require 'json'
-require 'yaml'
-require 'digest'
-require 'fileutils'
 require_relative '../lib/rules_runner'
+require_relative '../lib/working_tree'
 
 # Tools whose writes write-rules-check.rb already vetted.
 PRE_CHECKED_TOOLS = %w[Edit MultiEdit Write NotebookEdit].freeze
@@ -52,123 +50,10 @@ PRE_CHECKED_TOOLS = %w[Edit MultiEdit Write NotebookEdit].freeze
 # branch has dirty, so a big working tree does not switch the sweep off.
 MAX_FILES = 25
 
-# Skip anything bigger; it is generated or vendored, not hand-written.
-MAX_BYTES = 512 * 1024
-
 # Commands that move git's own state rather than author code.
 GIT_STATE_COMMAND = /\bgit\s+(?:-\S+\s+|--\S+\s+)*
                      (?:checkout|switch|restore|reset|rebase|merge|stash|pull|
                         cherry-pick|revert|apply|clean|am|bisect)\b/x
-
-# Per-session record of each changed file's last-seen content. The diff against
-# it is what a sweep evaluates; writing it back is what keeps a rule from
-# re-firing until the file changes again.
-class Snapshots
-  def initialize(dir)
-    @dir = dir
-  end
-
-  def initialized?
-    File.exist?(marker)
-  end
-
-  def initialize!
-    FileUtils.mkdir_p(@dir)
-    FileUtils.touch(marker)
-  end
-
-  def read(relative_path)
-    path = path_for(relative_path)
-    File.exist?(path) ? scrub(File.read(path, mode: 'r:UTF-8')) : nil
-  end
-
-  # A cheap "has this moved since we last looked?" so a sweep only reads the
-  # files one tool call touched. The snapshot is written straight after the
-  # source is read, so an untouched file's snapshot is never older than it.
-  def stale?(relative_path, source_path)
-    snapshot = path_for(relative_path)
-    return true unless File.exist?(snapshot)
-
-    File.mtime(source_path) > File.mtime(snapshot)
-  end
-
-  def write(relative_path, content)
-    FileUtils.mkdir_p(@dir)
-    File.write(path_for(relative_path), content, mode: 'w:UTF-8')
-  end
-
-  def forget(relative_path)
-    FileUtils.rm_f(path_for(relative_path))
-  end
-
-  private
-
-  def marker
-    File.join(@dir, '.initialized')
-  end
-
-  # Hashed so a path's separators and length cannot escape the snapshot dir.
-  def path_for(relative_path)
-    File.join(@dir, Digest::SHA256.hexdigest(relative_path))
-  end
-
-  def scrub(text)
-    text.valid_encoding? ? text : text.scrub
-  end
-end
-
-def git(project_dir, *args)
-  output = IO.popen(['git', '-C', project_dir, *args], err: File::NULL, &:read)
-  return nil unless $?.success?
-
-  output.force_encoding('UTF-8').scrub
-end
-
-# [[status_code, repo_relative_path], ...]. NUL-delimited so paths with spaces
-# survive; rename and copy entries carry a trailing source path to consume.
-def changed_entries(project_dir)
-  raw = git(project_dir, 'status', '--porcelain', '--untracked-files=all', '-z')
-  return nil if raw.nil?
-
-  fields = raw.split("\0")
-  entries = []
-
-  until fields.empty?
-    field = fields.shift
-    next if field.nil? || field.length < 4
-
-    code = field[0, 2]
-    entries << [code, field[3..]]
-    fields.shift if code.start_with?('R', 'C')
-  end
-
-  entries
-end
-
-# Lines present in `current` that `baseline` does not account for, in order.
-# A multiset difference rather than a real LCS diff: rules match by regex, so
-# what matters is that unchanged lines stay out of the content being scanned.
-def added_lines(baseline, current)
-  return current if baseline.nil? || baseline.empty?
-
-  remaining = Hash.new(0)
-  baseline.each_line { |line| remaining[line] += 1 }
-
-  added = current.each_line.reject do |line|
-    next false if remaining[line].zero?
-
-    remaining[line] -= 1
-    true
-  end
-
-  added.join
-end
-
-def read_source(path)
-  content = File.read(path, mode: 'r:UTF-8')
-  content = content.scrub unless content.valid_encoding?
-  content.include?("\0") ? nil : content
-end
 
 # The path an already-vetted tool call wrote, if this event is one.
 def pre_checked_path(input, project_dir)
@@ -176,16 +61,7 @@ def pre_checked_path(input, project_dir)
 
   tool_input = input['tool_input'] || {}
   raw = (tool_input['file_path'] || tool_input['notebook_path']).to_s
-  raw.empty? ? nil : real_path(File.expand_path(raw, project_dir))
-end
-
-# git reports real paths, but CLAUDE_PROJECT_DIR and tool arguments can arrive
-# through a symlink (/var vs /private/var on macOS). Compare resolved paths or
-# nothing inside the project looks like it is inside the project.
-def real_path(path)
-  File.realpath(path)
-rescue Errno::ENOENT
-  File.expand_path(path)
+  raw.empty? ? nil : WorkingTree.real_path(File.expand_path(raw, project_dir))
 end
 
 def git_state_command?(input)
@@ -206,42 +82,14 @@ session_id = input['session_id'].to_s
 project_dir = ENV['CLAUDE_PROJECT_DIR'].to_s
 exit 0 if project_dir.empty?
 
-config_path = File.join(RulesRunner.rules_dir(project_dir), 'write.yml')
-exit 0 unless File.exist?(config_path)
-
-rules = YAML.safe_load_file(config_path) || {}
+rules = RulesRunner.load_rules(project_dir, 'write')
 exit 0 if rules.empty?
 
-repo_root = git(project_dir, 'rev-parse', '--show-toplevel')&.strip
-exit 0 if repo_root.nil? || repo_root.empty?
-
-entries = changed_entries(project_dir)
-exit 0 if entries.nil?
-
-snapshots = Snapshots.new(File.join(RulesRunner.session_dir(project_dir, session_id), 'snapshots'))
-project_root = real_path(project_dir)
-scratch_root = File.join(project_root, 'tmp', '.claude-advisory')
+snapshots = WorkingTree::Snapshots.new(File.join(RulesRunner.session_dir(project_dir, session_id), 'snapshots'))
 was_initialized = snapshots.initialized?
 
-# Everything git calls dirty, narrowed to what has actually moved since the last
-# sweep. A long-lived branch is dirty in dozens of files; only the handful this
-# tool call touched are worth reading, and only they count against MAX_FILES.
-candidates = entries.filter_map do |code, repo_path|
-  absolute = File.expand_path(File.join(repo_root, repo_path))
-  next unless absolute.start_with?("#{project_root}/")
-  next if absolute.start_with?("#{scratch_root}/") # the sweep's own snapshots
-
-  relative = absolute[(project_root.length + 1)..]
-
-  unless File.file?(absolute)
-    snapshots.forget(relative)
-    next
-  end
-  next if File.size(absolute) > MAX_BYTES
-  next unless snapshots.stale?(relative, absolute)
-
-  [code, repo_path, absolute, relative]
-end
+candidates = WorkingTree.moved_files(project_dir, snapshots)
+exit 0 if candidates.nil?
 
 # Record-only passes: the starting state of a session, a changeset too big to
 # be authored code, and git moving its own state.
@@ -261,26 +109,24 @@ runner = RulesRunner.from_env(
 rule_globs = rules.each_value.flat_map { |rule| rule.is_a?(Hash) ? Array(rule['files']) : [] }.uniq
 already_checked = pre_checked_path(input, project_dir)
 
-candidates.each do |code, repo_path, absolute, relative|
-  content = read_source(absolute)
+candidates.each do |change|
+  content = WorkingTree.read_source(change.absolute)
   next if content.nil?
 
-  # An untracked file is new in full; a tracked one is only new since HEAD.
-  baseline = snapshots.read(relative) ||
-             (code.start_with?('?') ? '' : git(project_dir, 'show', "HEAD:#{repo_path}").to_s)
-  snapshots.write(relative, content)
+  baseline = WorkingTree.baseline(project_dir, snapshots, change)
+  snapshots.write(change.relative, content)
 
   next if silent
-  next if absolute == already_checked
-  next unless runner.matches_globs?(rule_globs, relative, absolute)
+  next if change.absolute == already_checked
+  next unless runner.matches_globs?(rule_globs, change.relative, change.absolute)
 
-  added = added_lines(baseline, content)
+  added = WorkingTree.added_lines(baseline, content)
   next if added.strip.empty?
 
   runner.apply_write_rules(
     rules,
-    file_path: absolute,
-    relative_path: relative,
+    file_path: change.absolute,
+    relative_path: change.relative,
     new_content: added,
     session_id: session_id,
   )

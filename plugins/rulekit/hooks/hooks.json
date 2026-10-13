@@ -46,6 +46,33 @@
             "type": "command",
             "command": "${CLAUDE_PLUGIN_ROOT}/bin/post-write-sweep.rb --bootstrap",
             "timeout": 15
+          },
+          {
+            "type": "command",
+            "command": "${CLAUDE_PLUGIN_ROOT}/bin/stop-rules-check.rb --record",
+            "timeout": 15
+          }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "${CLAUDE_PLUGIN_ROOT}/bin/stop-rules-check.rb --record",
+            "timeout": 15
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "${CLAUDE_PLUGIN_ROOT}/bin/stop-rules-check.rb",
+            "timeout": 60
           }
         ]
       }
