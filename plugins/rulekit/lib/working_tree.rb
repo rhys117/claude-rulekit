@@ -56,8 +56,12 @@ module WorkingTree
       File.write(path_for(relative_path), content, mode: 'w:UTF-8')
     end
 
-    def forget(relative_path)
-      FileUtils.rm_f(path_for(relative_path))
+    # Drops every snapshot but those of `relative_paths`. A file git no longer
+    # calls dirty is either gone or back at HEAD, and its old snapshot would
+    # hide the same lines if they were written again.
+    def keep_only(relative_paths)
+      kept = relative_paths.map { |relative_path| path_for(relative_path) }
+      FileUtils.rm_f(Dir.glob(File.join(@dir, '*')) - kept)
     end
 
     private
@@ -76,7 +80,7 @@ module WorkingTree
     end
   end
 
-  # One dirty file that has moved since its snapshot.
+  # One dirty file.
   Change = Struct.new(:code, :repo_path, :absolute, :relative)
 
   module_function
@@ -112,7 +116,9 @@ module WorkingTree
   # Everything git calls dirty, narrowed to what has actually moved since
   # `snapshots` last saw it. A long-lived branch is dirty in dozens of files;
   # only the handful touched since then are worth reading. Returns nil outside
-  # a git repo. Snapshots of files that have since vanished are dropped.
+  # a git repo. Snapshots of files git no longer calls dirty are dropped: a
+  # deleted untracked file leaves `git status` altogether, as does a tracked
+  # one that was committed or reverted.
   def moved_files(project_dir, snapshots)
     repo_root = git(project_dir, 'rev-parse', '--show-toplevel')&.strip
     return nil if repo_root.nil? || repo_root.empty?
@@ -123,21 +129,18 @@ module WorkingTree
     project_root = real_path(project_dir)
     scratch_root = File.join(project_root, 'tmp', '.claude-advisory')
 
-    entries.filter_map do |code, repo_path|
+    dirty = entries.filter_map do |code, repo_path|
       absolute = File.expand_path(File.join(repo_root, repo_path))
       next unless absolute.start_with?("#{project_root}/")
       next if absolute.start_with?("#{scratch_root}/") # the hooks' own snapshots
+      next unless File.file?(absolute)
 
-      relative = absolute[(project_root.length + 1)..]
+      Change.new(code, repo_path, absolute, absolute[(project_root.length + 1)..])
+    end
+    snapshots.keep_only(dirty.map(&:relative))
 
-      unless File.file?(absolute)
-        snapshots.forget(relative)
-        next
-      end
-      next if File.size(absolute) > MAX_BYTES
-      next unless snapshots.stale?(relative, absolute)
-
-      Change.new(code, repo_path, absolute, relative)
+    dirty.select do |change|
+      File.size(change.absolute) <= MAX_BYTES && snapshots.stale?(change.relative, change.absolute)
     end
   end
 

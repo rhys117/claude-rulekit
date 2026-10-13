@@ -134,6 +134,33 @@ RSpec.describe 'judge rules' do
       expect { expect(project.stop('s2')).to be_silent }.not_to(change { judge.requests.size })
     end
 
+    it 'judges a deleted file again when the same content is written back' do
+      project.record('s2')
+      add 'db/migrate/002_x.rb', 'User.find_each { backfill slug }'
+      expect(project.stop('s2')).to fire('semantic_backfill')
+
+      FileUtils.rm(project.path('db/migrate/002_x.rb'))
+      project.record('s2')
+      add 'db/migrate/002_x.rb', 'User.find_each { backfill slug }'
+
+      expect { expect(project.stop('s2')).to fire('semantic_backfill') }.to change { judge.requests.size }.by(1)
+    end
+
+    it 'judges a reverted tracked file again when the same change is made again' do
+      project.write('db/migrate/002_x.rb', "add_index :users, :email\n")
+      project.git_commit_all('migration')
+      project.record('s2')
+      add 'db/migrate/002_x.rb', 'User.find_each { backfill slug }'
+      expect(project.stop('s2')).to fire('semantic_backfill')
+
+      project.write('db/migrate/002_x.rb', "add_index :users, :email\n")
+      project.record('s2')
+      add 'db/migrate/002_x.rb', 'User.find_each { backfill slug }'
+
+      expect(project.stop('s2')).to fire('semantic_backfill')
+      expect(judge.requests.last.state).not_to include('add_index'), 'only the lines added since HEAD are sent'
+    end
+
     it 'returns a warn rule as feedback, skips a pattern miss, and ignores edits made between turns' do
       project.record('s2')
       add 'db/migrate/004_user_edit.rb', 'backfill by hand'

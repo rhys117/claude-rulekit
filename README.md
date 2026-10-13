@@ -339,7 +339,7 @@ PreToolUse(Edit|Write)  →  rules see the content about to be written
 PostToolUse(*)          →  rules see the lines that did get written
 ```
 
-**How it decides what is new.** `git status` supplies the candidate set — cheap, and it honours `.gitignore`. Content comes from a per session snapshot of each file's last seen state under `tmp/.claude-advisory/<session_id>/snapshots/`, so `new_content` is the lines that one tool call added: not the whole file, and not the whole branch diff. A tracked file with no snapshot yet falls back to its `HEAD` version, so a one line `sed` into a committed file does not re-flag everything already in it. Writing the snapshot back is also what stops a rule re-firing on every later tool call — once swept, a file shows no delta until it changes again.
+**How it decides what is new.** `git status` supplies the candidate set — cheap, and it honours `.gitignore`. Content comes from a per session snapshot of each file's last seen state under `tmp/.claude-advisory/<session_id>/snapshots/`, so `new_content` is the lines that one tool call added: not the whole file, and not the whole branch diff. A tracked file with no snapshot yet falls back to its `HEAD` version, so a one line `sed` into a committed file does not re-flag everything already in it. Writing the snapshot back is also what stops a rule re-firing on every later tool call — once swept, a file shows no delta until it changes again. A snapshot is dropped once git stops calling its file dirty, because it was deleted, committed or reverted, so the same lines written again are checked again.
 
 **What it deliberately ignores.**
 
