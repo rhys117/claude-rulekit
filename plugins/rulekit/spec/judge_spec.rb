@@ -2,6 +2,7 @@
 #
 # Covers: the per-edit hooks leave `judge:` rules alone, Stop judges what the
 # turn changed in one request per file, thresholds and the `pattern` prefilter,
+# criteria, choice and score questions, the flag band,
 # block vs warn output, an unchanged tree is not asked about twice, edits made
 # between turns are not judged, the per-turn continuation cap, the env names
 # and their TypeSafe fallbacks, and failing open when unconfigured or
@@ -174,6 +175,93 @@ RSpec.describe 'judge rules' do
       expect(out.stdout).not_to include('"decision"'), 'warn rule does not block'
       expect(judge.requests.size).to eq(1), 'edits made between turns are not judged'
       expect(judge.requests.last.questions).not_to have_key('prefiltered'), 'pattern miss is not asked'
+    end
+
+    describe 'beyond a bare yes/no' do
+      before do
+        project.rules('write.yml', <<~YAML)
+          with_criteria:
+            type: block
+            files: ["lib/**/*"]
+            judge:
+              question: "Does this backfill?"
+              flag: 0.5
+              criteria:
+                true: "find_each with update"
+                false: "add_index"
+            context: yes or no
+
+          logs_to_stdout:
+            type: warn
+            files: ["lib/**/*"]
+            judge:
+              type: choice
+              question: "Where does it log?"
+              criteria:
+                stdout: "puts or print"
+                logger: "Rails.logger"
+              violating: [stdout]
+            context: Use the logger.
+
+          restates_code:
+            type: warn
+            files: ["lib/**/*"]
+            judge:
+              type: score
+              question: "How much does this comment restate the code?"
+              criteria: ["not at all", "in passing", "line for line"]
+              violating_from: 2
+            context: Say why, not what.
+
+          half_a_choice:
+            type: block
+            files: ["lib/**/*"]
+            judge:
+              type: choice
+              question: "Which?"
+            context: never asked
+        YAML
+        project.record('s5')
+      end
+
+      it 'sends criteria with the question, and each shape as its own type' do
+        add 'lib/x.rb', 'backfill'
+
+        out = project.stop('s5')
+
+        expect(out).to fire('with_criteria')
+        expect(out).to fire('logs_to_stdout')
+        expect(out).to fire('restates_code')
+        questions = judge.requests.last.questions
+        expect(questions['with_criteria']).to eq(
+          'type' => 'noul', 'instructions' => 'Does this backfill?',
+          'criteria' => { 'true' => 'find_each with update', 'false' => 'add_index' }
+        )
+        expect(questions.dig('logs_to_stdout', 'type')).to eq('choice')
+        expect(questions.dig('restates_code', 'criteria')).to eq(['not at all', 'in passing', 'line for line'])
+        expect(questions).not_to have_key('half_a_choice'), 'a choice with no options is not asked'
+      end
+
+      it 'notes a score between flag and threshold for the user, only on a rule that sets flag' do
+        add 'lib/x.rb', 'borderline'
+
+        out = project.stop('s5')
+
+        expect(out.stdout).to include('"systemMessage"')
+        expect(out.stdout).to include('[with_criteria] lib/x.rb: yes or no (scored 0.6)')
+        expect(out.stdout).not_to include('logs_to_stdout'), 'a rule with no flag stays silent below its threshold'
+        expect(out.stdout).not_to include('"decision"')
+      end
+
+      it 'sends a flag note alongside a finding' do
+        add 'lib/x.rb', 'backfill'
+        add 'lib/y.rb', 'borderline'
+
+        out = project.stop('s5')
+
+        expect(out.stdout).to include('"decision":"block"')
+        expect(out.stdout).to include('[with_criteria] lib/y.rb: yes or no (scored 0.6)')
+      end
     end
 
     it 'keeps one turn open at most twice, then tells the user instead' do

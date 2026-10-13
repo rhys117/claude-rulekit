@@ -1,8 +1,9 @@
 # An Abide rubric judged on Stop, against a fake judge server.
 #
 # Covers: off unless RULEKIT_ABIDE_RUBRIC is set, a model-checked rule is
-# asked about and blocks, scope and its every-file default, the rubric's own
-# threshold, the rules left out (not model-checked, not active, not boolean),
+# asked about and blocks, choice and score questions, scope and its every-file
+# default, the rubric's own thresholds and the flag band between them, the
+# rules left out (not model-checked, not active),
 # a path in the variable, a write.yml rule of the same name winning or
 # switching it off, the
 # per-edit hooks never seeing these rules, and failing open on a bad rubric.
@@ -43,9 +44,23 @@ RSpec.describe 'an Abide rubric' do
       model_rule('everywhere'),
       model_rule('switched-off', status: 'disabled'),
       model_rule('weak', status: 'weak'),
-      model_rule('a-choice', check: {
+      model_rule('a-choice', scope: ['app/**/*'], check: {
                    type: 'model',
-                   question: { type: 'choice', instructions: 'Which?', criteria: { a: 'x', b: 'y' }, violating: ['a'] },
+                   question: {
+                     type: 'choice',
+                     instructions: 'Where does it log?',
+                     criteria: { stdout: 'puts', logger: 'Rails.logger' },
+                     violating: ['stdout'],
+                   },
+                 }),
+      model_rule('a-score', scope: ['app/**/*'], check: {
+                   type: 'model',
+                   question: {
+                     type: 'score',
+                     instructions: 'How much does this restate the code?',
+                     criteria: ['not at all', 'in passing', 'line for line'],
+                     violatingFrom: 2,
+                   },
                  }),
       { id: 'for-the-linter', text: 'No var.', source: { path: 'AGENTS.md' }, check: { type: 'lint', how: 'no-var' } },
     ]
@@ -83,17 +98,53 @@ RSpec.describe 'an Abide rubric' do
     expect(out).to fire('no-backfill-in-migration')
     expect(out.stdout).to include('db/migrate/001_x.rb: Rule no-backfill-in-migration as written. (AGENTS.md:7)')
 
-    question = judge.requests.last.questions.fetch('no-backfill-in-migration')
-    expect(question['type']).to eq('noul')
-    expect(question['instructions']).to eq(
-      "Does this migration move data?\nYes, for example: User.find_each\nNo, for example: add_index",
+    expect(judge.requests.last.questions.fetch('no-backfill-in-migration')).to eq(
+      'type' => 'noul',
+      'instructions' => 'Does this migration move data?',
+      'criteria' => { 'true' => 'User.find_each', 'false' => 'add_index' },
     )
   end
 
-  it 'leaves out rules that are not model-checked, not active, or not yes/no' do
+  it 'asks choice and score questions and fires on the weight of the violating answers' do
+    out = changed('app/x.rb', 'backfill')
+
+    expect(out).to fire('a-choice')
+    expect(out).to fire('a-score')
+    questions = judge.requests.last.questions
+    expect(questions.fetch('a-choice')).to eq(
+      'type' => 'choice',
+      'instructions' => 'Where does it log?',
+      'criteria' => { 'stdout' => 'puts', 'logger' => 'Rails.logger' },
+    )
+    expect(questions.fetch('a-score')).to eq(
+      'type' => 'score',
+      'instructions' => 'How much does this restate the code?',
+      'criteria' => ['not at all', 'in passing', 'line for line'],
+    )
+
+    out = changed('app/y.rb', 'nothing to see')
+    expect(out).to be_silent, 'weight on the compliant answers does not fire'
+  end
+
+  it 'tells the user, not the agent, about a score in the flag band' do
+    out = changed('app/x.rb', 'borderline')
+
+    expect(out.stdout).to include('"systemMessage"')
+    expect(out.stdout).to include('[a-choice] app/x.rb: Rule a-choice as written. (AGENTS.md:7) (scored 0.6)')
+    expect(out.stdout).not_to include('"decision"')
+    expect(out.stdout).not_to include('additionalContext')
+
+    project.write('.abide/rubric.json', rubric(rules, thresholds: { act: 0.8, flag: 0.7 }))
+    expect(changed('app/y.rb', 'borderline')).to be_silent, "below the rubric's own flag threshold nothing is said"
+  end
+
+  it 'leaves out rules that are not model-checked or not active' do
     changed('db/migrate/001_x.rb', 'User.find_each { backfill }')
 
     expect(judge.requests.last.questions.keys).to contain_exactly('no-backfill-in-migration', 'everywhere')
+
+    changed('app/x.rb', 'backfill')
+    expect(judge.requests.last.questions.keys).to contain_exactly('everywhere', 'a-choice', 'a-score')
   end
 
   it 'applies a rule with no scope to every file, and a scoped one only inside it' do
@@ -115,7 +166,10 @@ RSpec.describe 'an Abide rubric' do
   it "fires at the rubric's act threshold, 0.8 by default" do
     project.write('.abide/rubric.json', rubric(rules, thresholds: { act: 0.95, flag: 0.5 }))
 
-    expect(changed('lib/x.rb', 'backfill')).to be_silent, 'the fake judge answers 0.9'
+    out = changed('lib/x.rb', 'backfill')
+
+    expect(out.stdout).not_to include('"decision"'), 'the fake judge answers 0.9'
+    expect(out.stdout).to include('"systemMessage"'), '0.9 is now in the flag band'
     expect(judge.requests.size).to eq(1)
   end
 
@@ -179,7 +233,7 @@ RSpec.describe 'an Abide rubric' do
     wrong_shape = [
       rubric([{ id: 'x', check: 'model' }]),
       rubric([model_rule('x', check: { type: 'model', question: 'is it?' })]),
-      rubric(rules, thresholds: 7),
+      rubric([model_rule('x', check: { type: 'model', question: { type: 'choice', instructions: 'Which?' } })]),
     ]
     [nil, '{ not json', '[]', rubric(rules, version: 2), *wrong_shape].each_with_index do |content, index|
       content.nil? ? FileUtils.rm(project.path('.abide/rubric.json')) : project.write('.abide/rubric.json', content)

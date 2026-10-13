@@ -12,6 +12,22 @@ require 'uri'
 #   judge:
 #     question: "Does this migration backfill data in the same file that adds a NOT NULL column?"
 #     threshold: 0.8        # optional, default 0.7
+#     flag: 0.5             # optional: from here up to the threshold, a note to the user
+#     criteria:             # optional: what a yes and a no look like
+#       true: "add_column null: false, then update_all"
+#       false: "add_column alone"
+#
+# Two more shapes ask for more than yes or no. The probability the rule is
+# measured by is then the weight the judge put on the answers that break it:
+#
+#   judge:                              judge:
+#     type: choice                        type: score
+#     question: "Where does it log?"      question: "How much does this restate the code?"
+#     criteria:                           criteria:          # best first, at most 10
+#       logger: "Rails.logger"              - "not at all"
+#       stdout: "puts or print"             - "in passing"
+#       none: "nothing is logged"           - "line for line"
+#     violating: [stdout]                 violating_from: 2  # index of the first level that breaks it
 #
 # The rule names no model. Which one answers is configuration, so swapping the
 # backend never touches write.yml. The default is TypeSafe's hosted Jev
@@ -22,7 +38,7 @@ require 'uri'
 # The judge may be a paid network call, so `judge:` rules are not asked about
 # on every edit. stop-rules-check.rb evaluates them when the agent finishes a
 # turn, and each changed file costs one request carrying every `judge:` rule
-# that matched it, as a yes/no (`noul`) question apiece.
+# that matched it, as one question apiece (`noul` is the protocol's yes/no).
 #
 # The judge is strictly optional and fails open. Unconfigured — no API key and
 # no URL — nothing is sent at all. Every failure — unreachable, timeout,
@@ -82,44 +98,82 @@ class JudgeClient
     @configured
   end
 
-  # `configs` maps a rule name to its `judge:` hash. Returns the names of the
-  # rules that fire for this file — empty when none do or the judge could not
-  # answer.
-  def fired(configs, relative_path:, new_content:)
-    return [] unless configured?
+  # `configs` maps a rule name to its `judge:` hash. Returns
+  # { name => probability } (0..1 that the rule is broken in this file) for
+  # every rule the judge answered — empty when it could not.
+  def verdicts(configs, relative_path:, new_content:)
+    return {} unless configured?
 
-    questions = configs.transform_values { |config| config['question'].to_s }.reject { |_, question| question.empty? }
-    return [] if questions.empty?
+    questions = configs.transform_values { |config| self.class.question(config) }.compact
+    return {} if questions.empty?
 
-    answers = probabilities(questions, "File: #{relative_path}\n\n#{new_content}") || {}
-    answers.filter_map do |name, probability|
-      name if probability >= Float(configs[name].fetch('threshold', DEFAULT_THRESHOLD))
+    answers = ask(questions, "File: #{relative_path}\n\n#{new_content}") || {}
+    questions.each_key.with_object({}) do |name, found|
+      probability = self.class.violation(configs[name], answers[name])
+      found[name] = probability unless probability.nil?
     end
+  end
+
+  # The question as the protocol wants it, or nil when the `judge:` hash does
+  # not make one: no text, or a choice or score without its answers.
+  def self.question(config)
+    instructions = config['question'].to_s
+    criteria = config['criteria']
+    return nil if instructions.empty?
+
+    case config['type'].to_s
+    when 'choice'
+      return nil unless criteria.is_a?(Hash) && criteria.size >= 2 && !Array(config['violating']).empty?
+
+      { type: 'choice', instructions: instructions, criteria: criteria }
+    when 'score'
+      return nil unless criteria.is_a?(Array) && criteria.size >= 2 && config['violating_from'].is_a?(Integer)
+
+      { type: 'score', instructions: instructions, criteria: criteria }
+    else
+      { type: 'noul', instructions: instructions }.merge(criteria.is_a?(Hash) ? { criteria: criteria } : {})
+    end
+  end
+
+  # Probability the rule is broken, from the judge's answer to its question.
+  # nil when the answer is missing or is not the shape that was asked for.
+  def self.violation(config, answer)
+    return nil unless answer.is_a?(Hash)
+
+    case config['type'].to_s
+    when 'choice'
+      violating = Array(config['violating']).map(&:to_s)
+      weigh(answer, answer['choice']) { |option| violating.include?(option.to_s) }
+    when 'score'
+      weigh(answer, answer['score']) { |level| Float(level, exception: false).to_f.round >= config['violating_from'] }
+    else
+      answer['noul'].to_f.clamp(0.0, 1.0) if answer['noul'].is_a?(Numeric)
+    end
+  end
+
+  # The weight on the answers the block calls violating. Without a
+  # distribution, the one answer that was picked decides it outright.
+  def self.weigh(answer, picked, &violating)
+    return nil if picked.nil?
+
+    weights = answer['probabilities']
+    return (violating.call(picked) ? 1.0 : 0.0) unless weights.is_a?(Hash)
+
+    weights.sum { |option, weight| weight.is_a?(Numeric) && violating.call(option) ? weight : 0.0 }.clamp(0.0, 1.0)
   end
 
   private
 
-  # `questions` maps a key to the question text. Returns { key => probability }
-  # (0..1 that the answer is yes) for every question the judge answered, or nil on
-  # any failure.
-  def probabilities(questions, text)
+  # `questions` maps a key to its question. Returns { key => answer } as the
+  # judge gave them, or nil on any failure.
+  def ask(questions, text)
     return nil if down?
 
-    body = {
-      model: @model,
-      state: text[0, MAX_CHARS],
-      questions: questions.transform_values { |question| { type: 'noul', instructions: question } },
-    }
-    response = post(body)
+    response = post(model: @model, state: text[0, MAX_CHARS], questions: questions)
     return mark_down unless response.is_a?(Net::HTTPSuccess)
 
     answers = JSON.parse(response.body)['answers']
-    return nil unless answers.is_a?(Hash)
-
-    questions.each_key.with_object({}) do |key, found|
-      value = answers.dig(key, 'noul')
-      found[key] = value.to_f if value.is_a?(Numeric)
-    end
+    answers.is_a?(Hash) ? answers : nil
   rescue StandardError
     mark_down
   end

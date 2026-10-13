@@ -10,17 +10,17 @@ require 'json'
 #
 #   id                          -> the rule's name
 #   scope (absent: every file)  -> files
-#   check.question              -> judge.question, criteria folded into the text
+#   check.question              -> judge: its type, question and criteria, and
+#                                  the answers that count as a violation
 #   thresholds.act (0.8)        -> judge.threshold, as a `block`
+#   thresholds.flag (0.5)       -> judge.flag, a note to the user below that
 #   text and source             -> context
 #
 # A rule is switched off by its own `status` in the rubric, or from rulekit's
 # side by a write.yml entry of the same name with `enabled: false`.
 #
-# Left out: rules a model does not check (lint, deferred, unenforceable), rules
-# whose status is not `active`, and `choice` and `score` questions, which the
-# judge protocol here has no shape for. Abide's flag band — a note to the user
-# between thresholds.flag and thresholds.act — has no counterpart either.
+# Left out: rules a model does not check (lint, deferred, unenforceable) and
+# rules whose status is not `active`.
 #
 # It is opt in and fails open. Unset, nothing is read. A rubric that is
 # missing, is not JSON, is a version this does not know, or is not shaped
@@ -35,7 +35,9 @@ module AbideRubric
   ENV_NAME = 'RULEKIT_ABIDE_RUBRIC'.freeze
   DEFAULT_PATH = File.join('.abide', 'rubric.json').freeze
   VERSION = 1
-  DEFAULT_THRESHOLD = 0.8
+  DEFAULT_THRESHOLDS = { 'act' => 0.8, 'flag' => 0.5 }.freeze
+  # Abide's question types, as `judge.type`. A yes/no question needs none.
+  QUESTION_TYPES = { 'boolean' => nil, 'choice' => 'choice', 'score' => 'score' }.freeze
   ON = %w[1 true yes on].freeze
   OFF = ['', '0', 'false', 'no', 'off'].freeze
   # Abide never judges its own directory.
@@ -58,13 +60,12 @@ module AbideRubric
     rubric = JSON.parse(File.read(file))
     return skip(file, 'is not a version 1 rubric') unless rubric.is_a?(Hash) && rubric['version'] == VERSION
 
-    threshold = rubric.dig('thresholds', 'act')
-    threshold = DEFAULT_THRESHOLD unless threshold.is_a?(Numeric)
+    thresholds = thresholds(rubric['thresholds'])
 
     Array(rubric['rules']).each_with_object({}) do |rule, rules|
       next unless judged?(rule)
 
-      rules[rule['id']] = translate(rule, threshold)
+      rules[rule['id']] = translate(rule, thresholds)
     end
   rescue StandardError => e
     skip(file, e.message)
@@ -74,29 +75,37 @@ module AbideRubric
     rule.is_a?(Hash) && rule['id'].is_a?(String) &&
       rule.fetch('status', 'active') == 'active' &&
       rule.dig('check', 'type') == 'model' &&
-      rule.dig('check', 'question', 'type') == 'boolean' &&
+      QUESTION_TYPES.key?(rule.dig('check', 'question', 'type')) &&
       !rule.dig('check', 'question', 'instructions').to_s.empty?
   end
 
-  def self.translate(rule, threshold)
+  # The rubric's own thresholds where they are numbers, Abide's defaults where not.
+  def self.thresholds(given)
+    given = {} unless given.is_a?(Hash)
+    DEFAULT_THRESHOLDS.to_h { |band, default| [band, given[band].is_a?(Numeric) ? given[band] : default] }
+  end
+
+  def self.translate(rule, thresholds)
     scope = Array(rule['scope'])
     {
       'type' => 'block',
       'files' => scope.empty? ? ['**/*'] : scope,
       'exclude' => EXCLUDE,
-      'judge' => { 'question' => question(rule['check']['question']), 'threshold' => threshold },
+      'judge' => judge(rule['check']['question'], thresholds),
       'context' => context(rule),
     }
   end
 
-  # The judge takes one string per question, so the criteria ride in it.
-  def self.question(question)
-    criteria = question['criteria'].is_a?(Hash) ? question['criteria'] : {}
-    [
-      question['instructions'],
-      ("Yes, for example: #{criteria['true']}" unless criteria['true'].to_s.empty?),
-      ("No, for example: #{criteria['false']}" unless criteria['false'].to_s.empty?),
-    ].compact.join("\n")
+  def self.judge(question, thresholds)
+    {
+      'type' => QUESTION_TYPES[question['type']],
+      'question' => question['instructions'],
+      'criteria' => question['criteria'],
+      'violating' => question['violating'],
+      'violating_from' => question['violatingFrom'],
+      'threshold' => thresholds['act'],
+      'flag' => thresholds['flag'],
+    }.compact
   end
 
   def self.context(rule)

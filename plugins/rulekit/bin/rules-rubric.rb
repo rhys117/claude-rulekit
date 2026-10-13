@@ -298,11 +298,42 @@ class RubricFile
     return issue(rule_name, 'judge must be a mapping with a question') unless judge.is_a?(Hash)
 
     issue rule_name, 'judge.question is empty' if judge['question'].to_s.strip.empty?
-    return unless judge.key?('threshold')
+    %w[threshold flag].each do |band|
+      next unless judge.key?(band)
 
-    threshold = judge['threshold']
-    issue rule_name, 'judge.threshold must be a number between 0 and 1' unless threshold.is_a?(Numeric) &&
-                                                                                threshold.between?(0, 1)
+      issue rule_name, "judge.#{band} must be a number between 0 and 1" unless judge[band].is_a?(Numeric) &&
+                                                                                 judge[band].between?(0, 1)
+    end
+    validate_judge_answers(rule_name, judge)
+  end
+
+  # A choice or score question names its answers and which of them break the rule.
+  def validate_judge_answers(rule_name, judge)
+    criteria = judge['criteria']
+
+    case judge['type']
+    when nil
+      issue rule_name, 'judge.criteria must be a mapping with true and false' unless criteria.nil? || criteria.is_a?(Hash)
+    when 'choice'
+      return issue(rule_name, 'judge.criteria must map at least two options') unless criteria.is_a?(Hash) &&
+                                                                                    criteria.size >= 2
+
+      violating = Array(judge['violating']).map(&:to_s)
+      known = criteria.keys.map(&:to_s)
+      if violating.empty? || violating.size >= known.size || !(violating - known).empty?
+        issue rule_name, 'judge.violating must name some, not all, of the options in judge.criteria'
+      end
+    when 'score'
+      return issue(rule_name, 'judge.criteria must list 2 to 10 levels') unless criteria.is_a?(Array) &&
+                                                                               criteria.size.between?(2, 10)
+
+      from = judge['violating_from']
+      unless from.is_a?(Integer) && from.between?(1, criteria.size - 1)
+        issue rule_name, 'judge.violating_from must be the index of a level after the first'
+      end
+    else
+      issue rule_name, "judge.type #{judge['type'].inspect} is not choice or score; leave it out for yes/no"
+    end
   end
 
   def validate_tools(rule_name, rule)

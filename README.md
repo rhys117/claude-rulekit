@@ -268,6 +268,31 @@ migration_backfill_semantic:
   context: Split the backfill into its own migration.
 ```
 
+A question can say more than that:
+
+| `judge:` key | Does |
+|---|---|
+| `criteria` | For a yes/no question, a `true` and a `false` example sent with it |
+| `flag` | A second, lower bar. A score from `flag` up to `threshold` goes to you as a `systemMessage`; the agent is not told. Unset, anything under `threshold` is silent |
+| `type: choice` | Asks which of the options in `criteria` (a map of name to description) applies. `violating` lists the ones that break the rule |
+| `type: score` | Asks where on the ordered levels in `criteria` (a list, best first, at most 10) the change sits. `violating_from` is the index of the first level that breaks the rule |
+
+For `choice` and `score` the probability held against `threshold` is the weight the judge put on the violating answers:
+
+```yaml
+comment_restates_code:
+  type: warn
+  files: ["app/**/*.rb"]
+  pattern: '#'
+  judge:
+    type: score
+    question: "How much does a comment added here restate the code beside it?"
+    criteria: ["not at all", "in passing", "line for line"]
+    violating_from: 2
+    flag: 0.5
+  context: Say why, not what.
+```
+
 The judge may be a paid network call, so a `judge:` rule is skipped on every edit and judged once, on `Stop`, over what the turn changed:
 
 ```
@@ -330,14 +355,16 @@ Each rule is read as a `block` rule with a `judge:` block:
 |---|---|
 | `id` | the rule's name |
 | `scope`, or every file when absent | `files` |
-| `check.question.instructions`, with its `criteria` | `judge.question` |
+| `check.question`: `boolean`, `choice` or `score`, with its `criteria` | `judge.question`, `type` and `criteria` |
+| `violating`, `violatingFrom` | `judge.violating`, `violating_from` |
 | `thresholds.act`, 0.8 by default | `judge.threshold` |
+| `thresholds.flag`, 0.5 by default | `judge.flag` |
 | `text` and `source` | `context`, as `<text> (<path>:<line>)` |
 
 - **Only the Stop hook reads it.** The per-edit hooks and the sweep never see these rules, and rulekit never writes to the rubric. Compiling, calibrating and tuning it stay Abide's job.
 - **It uses rulekit's judge settings**, so it needs the key or URL [above](#semantic-rules-with-a-judge-optional). `TYPESAFE_AI_API_KEY` in the environment is enough; Abide's `~/.abide/.env` and its global rubric are not read.
-- **Some rules are left out:** `lint`, `deferred` and `unenforceable` checks, any rule whose `status` is not `active`, and `choice` and `score` questions, which the judge protocol here has no shape for.
-- **No flag band.** A rule fires at `thresholds.act` or stays silent; Abide's note to you between `flag` and `act` has no counterpart.
+- **Some rules are left out:** `lint`, `deferred` and `unenforceable` checks, and any rule whose `status` is not `active`.
+- **Banded like Abide.** At `thresholds.act` and above the agent is sent back. From `flag` up to `act` you get a note and the agent does not. Below `flag`, nothing.
 - **`when` is ignored.** An `edit` rule and a `turn` rule are both asked once per changed file, about the lines the turn added to it. A `turn` rule that needs the whole diff or the prompt ("did this add more than was asked") is answering with less than Abide gives it.
 - **Globs are Ruby's, not picomatch's.** `**/*.ts` means the same in both; a brace set like `*.{ts,tsx}` or a `!` negation does not match here.
 - **A `write.yml` rule of the same name wins**, and a missing, malformed or other-version rubric is ignored.
