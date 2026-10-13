@@ -13,6 +13,12 @@ module WorkingTree
   # Skip anything bigger; it is generated or vendored, not hand-written.
   MAX_BYTES = 512 * 1024
 
+  # Above this many files moving at once, callers record and stay silent: that
+  # is history arriving, not code being authored. Counted against what moved
+  # since the caller last looked, not against everything the branch has dirty,
+  # so a big working tree does not switch a hook off.
+  MAX_FILES = 25
+
   # Record of each changed file's last-seen content. The diff against it is
   # what gets evaluated; writing it back is what keeps a rule from re-firing
   # until the file changes again.
@@ -140,6 +146,20 @@ module WorkingTree
   def baseline(project_dir, snapshots, change)
     snapshots.read(change.relative) ||
       (change.code.start_with?('?') ? '' : git(project_dir, 'show', "HEAD:#{change.repo_path}").to_s)
+  end
+
+  # Records the current state of each change in `snapshots` and yields it with
+  # the lines added since the previous snapshot, skipping files that are
+  # binary or gained nothing.
+  def each_addition(project_dir, snapshots, changes)
+    changes.each do |change|
+      content = read_source(change.absolute)
+      next if content.nil?
+
+      added = added_lines(baseline(project_dir, snapshots, change), content)
+      snapshots.write(change.relative, content)
+      yield change, added unless added.strip.empty?
+    end
   end
 
   # Lines present in `current` that `baseline` does not account for, in order.

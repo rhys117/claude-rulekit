@@ -45,11 +45,6 @@ require_relative '../lib/working_tree'
 # Tools whose writes write-rules-check.rb already vetted.
 PRE_CHECKED_TOOLS = %w[Edit MultiEdit Write NotebookEdit].freeze
 
-# Above this many files moving in a single tool call, record and stay silent.
-# Counted against what changed since the last sweep, not against everything the
-# branch has dirty, so a big working tree does not switch the sweep off.
-MAX_FILES = 25
-
 # Commands that move git's own state rather than author code.
 GIT_STATE_COMMAND = /\bgit\s+(?:-\S+\s+|--\S+\s+)*
                      (?:checkout|switch|restore|reset|rebase|merge|stash|pull|
@@ -95,7 +90,7 @@ exit 0 if candidates.nil?
 # be authored code, and git moving its own state.
 silent = bootstrap ||
          !was_initialized ||
-         candidates.length > MAX_FILES ||
+         candidates.length > WorkingTree::MAX_FILES ||
          git_state_command?(input)
 snapshots.initialize! unless was_initialized
 
@@ -109,19 +104,10 @@ runner = RulesRunner.from_env(
 rule_globs = rules.each_value.flat_map { |rule| rule.is_a?(Hash) ? Array(rule['files']) : [] }.uniq
 already_checked = pre_checked_path(input, project_dir)
 
-candidates.each do |change|
-  content = WorkingTree.read_source(change.absolute)
-  next if content.nil?
-
-  baseline = WorkingTree.baseline(project_dir, snapshots, change)
-  snapshots.write(change.relative, content)
-
+WorkingTree.each_addition(project_dir, snapshots, candidates) do |change, added|
   next if silent
   next if change.absolute == already_checked
   next unless runner.matches_globs?(rule_globs, change.relative, change.absolute)
-
-  added = WorkingTree.added_lines(baseline, content)
-  next if added.strip.empty?
 
   runner.apply_write_rules(
     rules,

@@ -29,15 +29,12 @@
 #
 # It stays silent — recording only — when the judge is not configured, when it
 # cannot be reached, on the first pass of a session, and when more than
-# MAX_FILES files moved at once.
+# WorkingTree::MAX_FILES files moved at once.
 
 require 'json'
 require 'fileutils'
 require_relative '../lib/rules_runner'
 require_relative '../lib/working_tree'
-
-# Above this many files changed in one turn, record and stay silent.
-MAX_FILES = 25
 
 # How many times one turn may be kept open: the first finding, plus one
 # re-check of whatever the agent changed in response.
@@ -75,7 +72,7 @@ exit 0 if changes.nil?
 
 silent = record_only ||
          !was_initialized ||
-         changes.length > MAX_FILES ||
+         changes.length > WorkingTree::MAX_FILES ||
          !runner.judge_configured?
 snapshots.initialize! unless was_initialized
 
@@ -85,18 +82,9 @@ FileUtils.rm_f(counter) if record_only
 
 rule_globs = stop_rules.each_value.flat_map { |rule| Array(rule['files']) }.uniq
 
-changes.each do |change|
-  content = WorkingTree.read_source(change.absolute)
-  next if content.nil?
-
-  baseline = WorkingTree.baseline(project_dir, snapshots, change)
-  snapshots.write(change.relative, content)
-
+WorkingTree.each_addition(project_dir, snapshots, changes) do |change, added|
   next if silent
   next unless runner.matches_globs?(rule_globs, change.relative, change.absolute)
-
-  added = WorkingTree.added_lines(baseline, content)
-  next if added.strip.empty?
 
   runner.apply_stop_rules(
     stop_rules,
