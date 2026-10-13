@@ -17,6 +17,8 @@
 #                      Omit to fire on file-glob match alone.
 #   context:           Static message returned to Claude (may be overridden by
 #                      a detector).
+#   enabled:           Optional. `false` switches the rule off without removing
+#                      it. /rules-compile keeps the flag on a generated rule.
 #   once_per_session:  Optional, warn-only. When true the rule fires at most
 #                      once per session (sentinel under tmp/.claude-advisory/).
 #                      Block rules ignore this flag; use block_once instead.

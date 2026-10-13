@@ -46,14 +46,23 @@ class RulesRunner
   # instruction files, as one hash. On a name clash the hand-written rule wins.
   # Entries that are not rules (the rubric's `_rubric` metadata) ride along and
   # are skipped by every hook, as anything without a known `type` is.
+  #
+  # A rule with `enabled: false` is left out, so no hook sees it. That is how
+  # a generated rule is switched off: /rules-compile keeps the flag when it
+  # rewrites the rubric.
   def self.load_rules(project_dir, kind)
-    ['_rubric', ''].each_with_object({}) do |suffix, rules|
+    rules = ['_rubric', ''].each_with_object({}) do |suffix, merged|
       path = rules_file(project_dir, kind, suffix)
       next if path.nil?
 
       loaded = YAML.safe_load_file(path)
-      rules.merge!(loaded) if loaded.is_a?(Hash)
+      merged.merge!(loaded) if loaded.is_a?(Hash)
     end
+    rules.reject { |_, rule| disabled?(rule) }
+  end
+
+  def self.disabled?(rule)
+    rule.is_a?(Hash) && rule['enabled'] == false
   end
 
   # Tool rules were called read rules, in read.yml and read_rubric.yml. A
