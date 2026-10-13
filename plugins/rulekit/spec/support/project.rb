@@ -42,10 +42,6 @@ class Project
     File.write(File.join(rules_dir, name), content)
   end
 
-  def remove_rules(*names)
-    names.each { |name| FileUtils.rm_f(File.join(rules_dir, name)) }
-  end
-
   def rename_rules(from, to)
     File.rename(File.join(rules_dir, from), File.join(rules_dir, to))
   end
