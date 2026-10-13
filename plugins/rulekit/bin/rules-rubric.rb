@@ -6,7 +6,7 @@
 # hand-written ones:
 #
 #   .claude/rules/write_rubric.yml   loaded with write.yml
-#   .claude/rules/read_rubric.yml    loaded with read.yml
+#   .claude/rules/tools_rubric.yml   loaded with tools.yml
 #
 # The agent does the reading and the judgement. This script does what should
 # not be left to judgement:
@@ -84,8 +84,8 @@ end
 
 # One <kind>_rubric.yml, read without the hand-written file merged in.
 class RubricFile
-  TYPES = { 'write' => %w[block block_once warn], 'read' => %w[block warn] }.freeze
-  READ_TOOLS = %w[Read Bash Grep Glob].freeze
+  TYPES = { 'write' => %w[block block_once warn], 'tools' => %w[block warn] }.freeze
+  SUPPORTED_TOOLS = %w[Read Bash Grep Glob].freeze
   NAME = /\A[a-z][a-z0-9_]*\z/
 
   attr_reader :kind, :issues, :notes
@@ -94,14 +94,14 @@ class RubricFile
     @root = root
     @kind = kind
     @rules_dir = RulesRunner.rules_dir(root)
-    @path = File.join(@rules_dir, "#{kind}_rubric.yml")
+    @path = RulesRunner.rules_file(root, kind, '_rubric') || File.join(@rules_dir, "#{kind}_rubric.yml")
     @issues = []
     @notes = []
     @data = load
   end
 
   def name
-    "#{@kind}_rubric.yml"
+    File.basename(@path)
   end
 
   def exist?
@@ -220,7 +220,7 @@ class RubricFile
       note rule_name, 'once_per_session only applies to warn; use block_once'
     end
 
-    @kind == 'write' ? validate_write(rule_name, rule) : validate_read(rule_name, rule)
+    @kind == 'write' ? validate_write(rule_name, rule) : validate_tools(rule_name, rule)
   end
 
   def validate_provenance(rule_name, rule)
@@ -258,7 +258,7 @@ class RubricFile
   def validate_write(rule_name, rule)
     globs = Array(rule['files'])
     issue rule_name, 'files is empty; a write rule never matches without a glob (use ["**/*"] for everywhere)' if globs.empty?
-    issue rule_name, 'tools is a read-rule key' if rule.key?('tools')
+    issue rule_name, 'tools is a tool-rule key' if rule.key?('tools')
     validate_judge(rule_name, rule['judge']) if rule.key?('judge')
     note_reach(rule_name, rule, globs)
 
@@ -298,9 +298,9 @@ class RubricFile
                                                                                 threshold.between?(0, 1)
   end
 
-  def validate_read(rule_name, rule)
-    issue rule_name, 'judge is not supported on read rules' if rule.key?('judge')
-    unknown = Array(rule['tools']) - READ_TOOLS
+  def validate_tools(rule_name, rule)
+    issue rule_name, 'judge is not supported on tool rules' if rule.key?('judge')
+    unknown = Array(rule['tools']) - SUPPORTED_TOOLS
     issue rule_name, "tools has unknown names: #{unknown.join(', ')}" unless unknown.empty?
     return unless shape(rule_name, rule) == 'match only' && Array(rule['files']).empty?
 
@@ -310,12 +310,12 @@ end
 
 # { rule name => file } for the hand-written rules, which win a name clash.
 def hand_written_names(root)
-  %w[write.yml read.yml].each_with_object({}) do |file, names|
-    path = File.join(RulesRunner.rules_dir(root), file)
-    next unless File.exist?(path)
+  %w[write tools].each_with_object({}) do |kind, names|
+    path = RulesRunner.rules_file(root, kind)
+    next if path.nil?
 
     loaded = YAML.safe_load_file(path)
-    loaded.each_key { |name| names[name] = file } if loaded.is_a?(Hash)
+    loaded.each_key { |name| names[name] = File.basename(path) } if loaded.is_a?(Hash)
   end
 end
 
@@ -377,7 +377,7 @@ def print_validation(rubrics)
 end
 
 ROOT = ENV['CLAUDE_PROJECT_DIR'].to_s.empty? ? Dir.pwd : ENV['CLAUDE_PROJECT_DIR']
-rubrics = %w[write read].map { |kind| RubricFile.new(ROOT, kind) }
+rubrics = %w[write tools].map { |kind| RubricFile.new(ROOT, kind) }
 
 case ARGV[0]
 when 'sources'

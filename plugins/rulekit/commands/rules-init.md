@@ -15,7 +15,12 @@ Steps:
 4. Copy the preset in without clobbering local edits:
    `cp -rn "${CLAUDE_PLUGIN_ROOT}/presets/$1/." .claude/rules/`
    (`-n` skips files that already exist, so re-running is safe.)
-5. Read the copied `.claude/rules/write.yml` and `.claude/rules/read.yml` and give
+   Tool rules were called read rules: if the project already has
+   `.claude/rules/read.yml` and had no `tools.yml` before the copy, remove the
+   `tools.yml` just copied in and say so. `tools.yml` replaces `read.yml` once
+   it exists, which would switch the user's own rules off; they can rename
+   `read.yml` to `tools.yml` when they are ready.
+5. Read the copied `.claude/rules/write.yml` and `.claude/rules/tools.yml` and give
    the user a short summary: how many rules were installed, which are `block` vs
    `warn`, and a one-line reminder that every rule's `context` message is meant to
    be edited to match this project's actual conventions.

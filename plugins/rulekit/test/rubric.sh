@@ -1,10 +1,11 @@
 #!/usr/bin/env bash
 # rubric.sh — Exercise the generated rubric files and bin/rules-rubric.rb.
 #
-# Covers: write_rubric.yml and read_rubric.yml are loaded by all four hooks
+# Covers: write_rubric.yml and tools_rubric.yml are loaded by all four hooks
 # beside the hand-written files, a hand-written rule wins a name clash, the
-# `_rubric` metadata is never treated as a rule, read rules honour `pattern`,
-# `exclude` carves a path out of a rule on both sides,
+# `_rubric` metadata is never treated as a rule, tool rules honour `pattern`,
+# `exclude` carves a path out of a rule on both sides, the legacy read.yml
+# names still load,
 # `sources` finds instruction files and reports staleness, and `validate`
 # accepts a good rubric and names what is wrong with a bad one.
 #
@@ -15,7 +16,7 @@ set -uo pipefail
 
 PLUGIN_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 W="$PLUGIN_ROOT/bin/write-rules-check.rb"
-R="$PLUGIN_ROOT/bin/read-rules-check.rb"
+R="$PLUGIN_ROOT/bin/tool-rules-check.rb"
 S="$PLUGIN_ROOT/bin/post-write-sweep.rb"
 STOP="$PLUGIN_ROOT/bin/stop-rules-check.rb"
 RUBRIC="$PLUGIN_ROOT/bin/rules-rubric.rb"
@@ -75,7 +76,7 @@ shadowed:
   text: "x"
   source: "CLAUDE.md:3"
 YAML
-cat > "$RULES/read_rubric.yml" <<YAML
+cat > "$RULES/tools_rubric.yml" <<YAML
 _rubric:
   compiled_at: "2026-10-13"
   sources:
@@ -158,18 +159,39 @@ assert_not_contains "shadowed rubric rule does not run" "$OUT" "rubric version"
 assert_eq "hand-written warn does not block" "$EC" "0"
 
 OUT=$(bash_event 'npm install left-pad' | "$R"); EC=$?
-assert_contains "read_rubric rule blocks a command" "$OUT" "[use_pnpm]"
-assert_eq "read_rubric block exit" "$EC" "2"
+assert_contains "tools_rubric rule blocks a command" "$OUT" "[use_pnpm]"
+assert_eq "tools_rubric block exit" "$EC" "2"
 OUT=$(bash_event 'pnpm install left-pad' | "$R")
-assert_silent "read pattern miss stays silent" "$OUT"
+assert_silent "tool pattern miss stays silent" "$OUT"
 OUT=$(echo '{"tool_name":"Grep","session_id":"r1","tool_input":{"pattern":"npm install","path":"docs"}}' | "$R")
-assert_silent "read rule keeps to its tools" "$OUT"
+assert_silent "tool rule keeps to its tools" "$OUT"
 
-printf '%s\n' 'no_legacy:' '  type: warn' '  tools: [Read]' '  files: ["legacy/**/*"]' '  exclude: ["legacy/README.md"]' '  context: legacy is deprecated' > "$RULES/read.yml"
+printf '%s\n' 'no_legacy:' '  type: warn' '  tools: [Read]' '  files: ["legacy/**/*"]' '  exclude: ["legacy/README.md"]' '  context: legacy is deprecated' > "$RULES/tools.yml"
 read_event() { echo '{"tool_name":"Read","session_id":"r1","tool_input":{"file_path":"'"$SMOKE/$1"'"}}'; }
-assert_contains "read rule fires inside its files" "$(read_event legacy/a.rb | "$R")" "[no_legacy]"
-assert_silent "exclude carves a path out of a read rule" "$(read_event legacy/README.md | "$R")"
-rm "$RULES/read.yml"
+assert_contains "tool rule fires inside its files" "$(read_event legacy/a.rb | "$R")" "[no_legacy]"
+assert_silent "exclude carves a path out of a tool rule" "$(read_event legacy/README.md | "$R")"
+rm "$RULES/tools.yml"
+
+printf '%s\n' 'judged_search:' '  type: warn' '  pattern: "left-pad"' '  judge: { question: "Is this a bad idea?" }' '  context: judged' > "$RULES/tools.yml"
+OUT=$(bash_event 'echo left-pad' | "$R" 2>&1)
+assert_not_contains "a judge on a tool rule does not fire on the bare match" "$OUT" "[judged_search]"
+assert_contains "a judge on a tool rule is reported" "$OUT" "judge is not supported on tool rules"
+rm "$RULES/tools.yml"
+
+echo "==> legacy read.yml / read_rubric.yml"
+
+mv "$RULES/tools_rubric.yml" "$RULES/read_rubric.yml"
+OUT=$(bash_event 'npm install left-pad' | "$R")
+assert_contains "read_rubric.yml still loads when tools_rubric.yml is absent" "$OUT" "[use_pnpm]"
+assert_contains "validate reads the legacy rubric" "$("$RUBRIC" validate)" "read_rubric.yml: 1 rules"
+printf '%s\n' 'old_name:' '  type: warn' '  pattern: "left-pad"' '  context: from read.yml' > "$RULES/read.yml"
+assert_contains "read.yml still loads when tools.yml is absent" "$(bash_event 'echo left-pad' | "$R")" "from read.yml"
+printf '%s\n' 'new_name:' '  type: warn' '  pattern: "left-pad"' '  context: from tools.yml' > "$RULES/tools.yml"
+OUT=$(bash_event 'echo left-pad' | "$R")
+assert_contains "tools.yml is used once it exists" "$OUT" "from tools.yml"
+assert_not_contains "read.yml is not merged in beside tools.yml" "$OUT" "from read.yml"
+rm "$RULES/read.yml" "$RULES/tools.yml"
+mv "$RULES/read_rubric.yml" "$RULES/tools_rubric.yml"
 
 echo '{"session_id":"r1"}' | "$S" --bootstrap
 sleep 1.1; echo 'default_scope { where(x: 1) }' > "$SMOKE/app/models/y.rb"
@@ -192,7 +214,7 @@ OUT=$("$RUBRIC" validate); EC=$?
 assert_contains "good rubric is valid" "$OUT" "valid"
 assert_eq "good rubric exit" "$EC" "0"
 assert_contains "write summary counts shapes" "$OUT" "write_rubric.yml: 3 rules (1 pattern, 1 judge, 0 detector, 1 match only), 1 skipped"
-assert_contains "read summary" "$OUT" "read_rubric.yml: 1 rules (1 pattern"
+assert_contains "tools summary" "$OUT" "tools_rubric.yml: 1 rules (1 pattern"
 assert_contains "block on files alone is noted" "$OUT" "note:  write_rubric.yml: shadowed: blocks every edit"
 assert_contains "glob that matches no file is noted" "$OUT" "shadowed: files (lib/**/*) match nothing in the repo yet"
 assert_not_contains "glob that matches a file is not noted" "$OUT" "no_default_scope: files"
@@ -251,8 +273,8 @@ wide_judge:
 YAML
 echo 'module Detectors; module Wrong; end; end' > "$RULES/detectors/bad_detector.rb"
 printf '%s\n' '_rubric:' '  sources:' "    - { path: CLAUDE.md, sha256: \"$(sha CLAUDE.md)\" }" \
-  'judged_read:' '  type: block_once' '  tools: [Bash, Edit]' '  judge: { question: "q" }' '  context: x' '  text: x' '  source: "CLAUDE.md:1"' \
-  'no_files:' '  type: warn' '  context: x' '  text: x' '  source: "CLAUDE.md:1"' > "$RULES/read_rubric.yml"
+  'judged_tool:' '  type: block_once' '  tools: [Bash, Edit]' '  judge: { question: "q" }' '  context: x' '  text: x' '  source: "CLAUDE.md:1"' \
+  'no_files:' '  type: warn' '  context: x' '  text: x' '  source: "CLAUDE.md:1"' > "$RULES/tools_rubric.yml"
 
 OUT=$("$RUBRIC" validate); EC=$?
 assert_eq "bad rubric exit" "$EC" "1"
@@ -270,13 +292,13 @@ assert_contains "text is required" "$OUT" "no_provenance: text is missing"
 assert_contains "context is required" "$OUT" "no_provenance: context is empty"
 assert_contains "exclude must be a list" "$OUT" "no_provenance: exclude must be a list of globs"
 assert_contains "detector must load" "$OUT" "bad_detector: detectors/bad_detector.rb does not load or does not define Detectors::BadDetector.call"
-assert_contains "read rules have no block_once" "$OUT" "read_rubric.yml: judged_read: type must be one of block, warn"
-assert_contains "read rules have no judge" "$OUT" "judged_read: judge is not supported on read rules"
-assert_contains "read tools are checked" "$OUT" "judged_read: tools has unknown names: Edit"
-assert_contains "names are unique across rubric files" "$OUT" "read_rubric.yml: no_files: name is already used in write_rubric.yml"
+assert_contains "tool rules have no block_once" "$OUT" "tools_rubric.yml: judged_tool: type must be one of block, warn"
+assert_contains "tool rules have no judge" "$OUT" "judged_tool: judge is not supported on tool rules"
+assert_contains "tool names are checked" "$OUT" "judged_tool: tools has unknown names: Edit"
+assert_contains "names are unique across rubric files" "$OUT" "tools_rubric.yml: no_files: name is already used in write_rubric.yml"
 
-printf '%s\n' 'not: [valid' > "$RULES/read_rubric.yml"
-assert_contains "unparseable rubric is reported" "$("$RUBRIC" validate)" "read_rubric.yml: does not parse"
+printf '%s\n' 'not: [valid' > "$RULES/tools_rubric.yml"
+assert_contains "unparseable rubric is reported" "$("$RUBRIC" validate)" "tools_rubric.yml: does not parse"
 
 echo
 echo "$PASS passed, $FAIL failed"

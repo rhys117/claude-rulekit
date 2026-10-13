@@ -21,7 +21,7 @@
 # detector, the rule fires whenever its files glob (and optional pattern)
 # match. A detector may override the context message for a given fire.
 #
-# Rule names must be unique across write.yml AND read.yml — both scripts
+# Rule names must be unique across write.yml AND tools.yml — both scripts
 # share the same per-session sentinel namespace.
 
 no_default_scope:
