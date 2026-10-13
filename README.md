@@ -1,64 +1,98 @@
 # rulekit
 
-Just in time, not just in case.
+**Just in time, not just in case.**
 
-Rulekit delivers coding conventions to a Claude Code agent at the moment it acts, instead of front-loading them into `CLAUDE.md` where they compete for attention and quietly stop landing. `PreToolUse` hooks match the file the agent is about to edit (by path glob) and the content it is about to write (by regex), then either **block** the edit or inject a one line advisory right then. A `PostToolUse` sweep guards the working tree itself, so the same rules still fire when a write arrives by heredoc, `sed -i`, a throwaway script or an MCP server rather than by `Edit`. A read side hook nudges before broad `Bash`, `Grep`, and `Glob` searches, so junk stays out of the context window in the first place.
-
-This is the pattern Anthropic calls [just-in-time context](https://www.anthropic.com/engineering/effective-context-engineering-for-ai-agents) and [progressive disclosure](https://www.anthropic.com/engineering/equipping-agents-for-the-real-world-with-agent-skills), aimed at the failure mode they call context rot: the more you put in the window up front, the less any single rule is recalled later.
-
-## Prior art, and where rulekit goes further
-
-Anthropic ships a first party plugin, **Hookify**, that already does the declarative half of this: rules that fire on `Edit`, `Write`, and `MultiEdit`, match file path and content by regex, and choose between block and warn. If your rules are pure globs and regexes, use Hookify.
-
-Rulekit is for when you have outgrown pure declarative rules. It adds four things Hookify does not have:
-
-1. **Pluggable detector modules.** Logic, not just a pattern. A detector is Ruby that runs in your repo, so it can read the file on disk, union it with the incoming edit, and name a real finding back ("this migration adds `NOT NULL` on `slug` and backfills it in the same file"). A regex knows what you are typing. A detector knows what is already there.
-2. **Per session escape hatches.** `block_once` denies the first attempt and yields on the retry, which encodes "this is usually wrong, but you are allowed to mean it." `warn` with `once_per_session` fires an advisory once and then stays quiet so it does not become noise.
-3. **Rules the agent cannot route around.** Matching on `Edit`, `Write` and `MultiEdit` guards a tool, not a codebase, and an agent told to prefer `Bash` will write a whole subsystem through heredocs without a single rule firing. Rulekit also watches the working tree, so how the write arrived stops mattering.
-4. **Read side guardrails.** The same idea pointed upstream. A nudge on `Bash`, `Grep`, and `Glob` to narrow a search before it floods the window.
-
-Think of it as Hookify for power users.
-
-## Install
-
-Rulekit needs **Ruby on `PATH`** (the hooks are Ruby scripts) and **`jq`** (used by the `SessionStart` cleanup hook). The post-write sweep also needs the project to be a **git repo**; without one it stays silent and the `PreToolUse` hooks carry on alone.
+Coding agents forget the conventions in `CLAUDE.md` long before they stop writing code. Rulekit puts each rule in front of the agent at the moment it applies, and stops the edit before it lands.
 
 ```
 /plugin marketplace add https://github.com/rhys117/claude-rulekit
 /plugin install rulekit@rulekit
-```
-
-Rulekit's manifest is at `plugins/rulekit/.claude-plugin/plugin.json`; the marketplace metadata for this repo at `.claude-plugin/marketplace.json`. The hooks no-op silently in any project that has no `.claude/rules/`, so enabling rulekit globally is safe.
-
-## Also in this marketplace: exhalekit
-
-Rulekit guards the inhale — it keeps conventions in view at the moment the agent writes code. [**exhalekit**](plugins/exhalekit/README.md) guards the exhale: a `PostToolUse` hook that fires after every non-refactor commit and makes the agent review what it just built for duplication and design drift, backed by a diff-scoped rubycritic run so the review has evidence behind it.
-
-```
-/plugin install exhalekit@rulekit
-```
-
-The two are independent — install either, or both. Exhalekit needs **`jq`**; its `/exhale-init` additionally assumes a Ruby project with Bundler, since the `diff-quality` script it installs shells out to `bundle exec rubycritic`. The hook itself is language agnostic and degrades to a plain reminder where that script is absent.
-
-## Quick start
-
-```
 /rules-init rails
-/rules-test
 ```
 
-`/rules-init rails` copies the bundled Rails preset from `plugins/rulekit/presets/rails/` into your project's `.claude/rules/`. `/rules-test` feeds synthetic tool calls through the hooks to confirm patterns compile and detectors load.
+Needs Ruby and `jq` on `PATH`, and a git repo for the checks that read the working tree. No API key.
 
-Already have a `CLAUDE.md` or `AGENTS.md` full of conventions? `/rules-compile` [turns them into rules](#compiling-rules-from-your-instruction-files).
+## What it does
+
+Every rule is decided by the cheapest check that can decide it. Most conventions never need a model.
+
+```
+                    decides                           when               cost
+  ────────────────────────────────────────────────────────────────────────────────────
+  1  glob + regex   "no default_scope in models"      before the edit    free, offline
+  2  detector       "NOT NULL column and its          before the edit    free, offline
+     (your Ruby)     backfill in one migration"
+  3  judge (Jev)    "this comment restates the code"  end of the turn    one request per
+                                                                         changed file
+```
+
+- **Rungs 1 and 2 are deterministic.** The same edit gets the same answer every time, in milliseconds, with nothing leaving your machine.
+- **Rung 3 is optional.** A decision model answers a yes/no question with a probability, for the rules nothing deterministic can decide. Without a key those rules stay silent and the rest carry on.
+- **Rules are yours.** They live in `.claude/rules/` as YAML you can read, and [`/rules-compile`](#compiling-rules-from-your-instruction-files) writes them from the `CLAUDE.md` you already have.
+
+## Before the edit, not after it
+
+A check that runs after the edit tells the agent to go back and repair something. A check that runs before it means the mistake is never written.
+
+| Check | Runs | On a violation |
+|---|---|---|
+| Glob, regex and detector rules | `PreToolUse`, before the edit or command | **A `block` denies the call.** Nothing lands, and the agent gets the reason. A `warn` lets it through with the advice attached |
+| [Post-write sweep](#writes-that-bypass-the-write-tools) | `PostToolUse`, after every tool call | A `block` tells the agent to undo it. Catches a heredoc, `sed -i` or script that never went through `Edit` |
+| [Judge](#semantic-rules-with-a-judge-optional) | `Stop`, once per turn | The turn is kept open with the finding |
+
+Only the judge waits for the end of the turn, because it may be a paid network call. Everything a deterministic check can decide is decided first.
+
+## Why not ask a model about everything
+
+| | Regex-only hooks | A model on every rule | rulekit |
+|---|---|---|---|
+| Earliest feedback | Before the edit | After the edit, or at the end of the turn | Before the edit, wherever a deterministic check can decide |
+| Same input, same answer | Yes | No, a probability against a threshold | Yes for regex and detector rules |
+| Works with no key and no network | Yes | No | Yes, except `judge` rules |
+| Rules a regex cannot express | No | Yes | Yes: a detector first, the judge for the rest |
+| Writes that bypass `Edit`/`Write` | Missed | Depends on the tool | Caught by the sweep |
+| Rules about commands and searches | No | Depends on the tool | Yes, [tool rules](#how-rules-work) |
+
+If your rules are pure globs and regexes, Anthropic's first party **Hookify** plugin already covers them. Rulekit is for what comes after that:
+
+1. **Detectors.** Ruby that runs in your repo, so it can read the file on disk, union it with the incoming edit, and name a real finding ("this migration adds `NOT NULL` on `slug` and backfills it in the same file"). A regex knows what you are typing. A detector knows what is already there.
+2. **Escape hatches.** `block_once` denies the first attempt and yields on the retry: "usually wrong, but you are allowed to mean it." `warn` with `once_per_session` says it once and then stays quiet.
+3. **Rules the agent cannot route around.** An agent told to prefer `Bash` will write a whole subsystem through heredocs without one `Edit`. Rulekit watches the working tree, so how the write arrived stops mattering.
+4. **Tool rules.** The same idea pointed at the request rather than the content: the wrong package manager, a search too broad for the context window, a deprecated file being opened.
+5. **A judge, last.** A decision model for what is left, asked once per turn about only the files that changed.
+
+This is the pattern Anthropic calls [just-in-time context](https://www.anthropic.com/engineering/effective-context-engineering-for-ai-agents) and [progressive disclosure](https://www.anthropic.com/engineering/equipping-agents-for-the-real-world-with-agent-skills), aimed at context rot: the more you put in the window up front, the less any single rule is recalled later.
+
+## Three minutes to the first block
+
+1. Install the plugin (the two `/plugin` lines above). The hooks do nothing in a project with no `.claude/rules/`, so enabling it globally is safe.
+2. Run `/rules-init rails` to copy the bundled Rails preset into `.claude/rules/`, or `/rules-compile` to build rules from your own `CLAUDE.md` and `AGENTS.md`.
+3. Run `/rules-test`. It feeds synthetic tool calls through the hooks to confirm patterns compile and detectors load.
+4. Ask the agent for something a rule forbids, such as a `default_scope` on a model. The edit is denied before it is written, and the agent sees the rule's `context`:
+
+```json
+{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny",
+ "permissionDecisionReason":"[no_default_scope] default_scope leaks into every query and is hard to undo. Scope explicitly at the call site instead.\n"}}
+```
+
+## Commands
+
+| Command | Does |
+|---|---|
+| `/rules-init <preset>` | Copies a preset into `.claude/rules/` without overwriting what is there |
+| `/rules-compile` | Turns the instructions in `CLAUDE.md`, `AGENTS.md` and friends into rules, each in the cheapest shape that decides it |
+| `/rules-test` | Smoke-tests every installed rule against the hooks |
+| `rules-rubric.rb sources` | Lists the instruction files and whether the compiled rules are out of date with them |
+| `rules-rubric.rb validate` | Checks the compiled rules against what the hooks accept. Exits 1 on any issue |
 
 ## How rules work
 
-Rules live in your project under `.claude/rules/`. Each side of the agent's work has a file you write by hand and, optionally, one that [`/rules-compile` generates](#compiling-rules-from-your-instruction-files). Both are loaded and have the same format:
+Rules live in your project under `.claude/rules/`. There are two kinds: **write rules** match the content landing in a file, and **tool rules** match what the agent asks a tool to do. Each kind has a file you write by hand and, optionally, one that [`/rules-compile` generates](#compiling-rules-from-your-instruction-files). Both are loaded and have the same format:
 
-| File | Fires on |
-|---|---|
-| `write.yml`, `write_rubric.yml` | `Edit`, `MultiEdit`, `Write` before the write — and, via the [post-write sweep](#writes-that-bypass-the-write-tools), any other write once it lands |
-| `read.yml`, `read_rubric.yml` | `Bash`, `Grep`, `Glob`, and `Read` when a rule asks for it |
+| File | Kind | Fires on |
+|---|---|---|
+| `write.yml`, `write_rubric.yml` | write | `Edit`, `MultiEdit`, `Write` before the write — and, via the [post-write sweep](#writes-that-bypass-the-write-tools), any other write once it lands |
+| `tools.yml`, `tools_rubric.yml` | tool | `Bash`, `Grep`, `Glob` before the call, and `Read` when a rule asks for it |
 
 Each file is a YAML map keyed by rule name:
 
@@ -76,14 +110,31 @@ no_default_scope:
 
 | Field | Used by | Description |
 |---|---|---|
-| `type` | all | `block`, `block_once`, or `warn`. |
-| `files` | write, read | Path globs (`**` supported). On write, the file being edited; on read, the path the tool touches (the `Read` file, or a `Grep`/`Glob` path). |
-| `exclude` | write, read | Optional path globs. A path matching one is left alone, for "everywhere except here". |
-| `pattern` | write, read | Optional Ruby regex. On write, matched against the new content. On read, against what the tool was asked for: the `Bash` command, the `Grep`/`Glob` search pattern, the `Read` path. Omit to fire on the other matches alone. |
-| `tools` | read | Optional list of tool names. Defaults to `[Bash, Grep, Glob]`; add `Read` to fire when the agent opens a file. |
+| `type` | all | `block` or `warn`. Write rules also take `block_once`. |
+| `files` | write, tool | Path globs (`**` supported). On a write rule, the file being edited, and required. On a tool rule, the path the tool touches (the `Read` file, or a `Grep`/`Glob` path); optional, and never matches `Bash`, which has no single path. |
+| `exclude` | write, tool | Optional path globs. A path matching one is left alone, for "everywhere except here". |
+| `pattern` | write, tool | Optional Ruby regex. On a write rule, matched against the new content. On a tool rule, against what the tool was asked for: the `Bash` command, the `Grep`/`Glob` search pattern, the `Read` path. Omit to fire on the other matches alone. |
+| `tools` | tool | Optional list of tool names. Defaults to `[Bash, Grep, Glob]`; add `Read` to fire when the agent opens a file. |
 | `judge` | write | Optional. Ask a [model](#semantic-rules-with-a-judge-optional) a yes/no question when the agent finishes its turn, instead of firing on the match alone. |
 | `context` | all | The message returned to the agent. A detector may override it. |
 | `once_per_session` | warn | When `true`, the rule fires at most once per session. |
+
+What each kind supports:
+
+| | Write rules | Tool rules |
+|---|---|---|
+| Matches | the content being written | the request: a command, a search, a path |
+| Decided | before the edit, after a write that bypassed the edit tools, and on `Stop` for `judge` | before the tool call |
+| `block`, `warn`, `once_per_session` | yes | yes |
+| `block_once` | yes | no |
+| `pattern`, `exclude`, [detectors](#detectors) | yes | yes |
+| `files` | required | optional |
+| `tools` | no | yes |
+| [`judge`](#semantic-rules-with-a-judge-optional) | yes | no |
+
+A tool rule that carries `judge:` is skipped, not fired on the bare match. A tool rule is decided before the call with no model in the loop; use a detector there instead.
+
+Tool rules were called read rules. `read.yml` and `read_rubric.yml` still load when `tools.yml` and `tools_rubric.yml` are absent, so rename them when convenient; once the new file exists the old one is ignored.
 
 Rule names must be unique across all four files; they share one per session sentinel namespace. If a generated rule and a hand-written one share a name, the hand-written one runs.
 
@@ -96,9 +147,9 @@ Most projects already state their conventions in prose, in `CLAUDE.md` or `AGENT
 ```
 CLAUDE.md, AGENTS.md, nested ones,          .claude/rules/
 .cursorrules, CONTRIBUTING.md                 ├── write.yml          yours
-        │                                     ├── read.yml           yours
+        │                                     ├── tools.yml          yours
         ▼                                     ├── write_rubric.yml   generated
-  /rules-compile ─────────────────────────►   ├── read_rubric.yml    generated
+  /rules-compile ─────────────────────────►   ├── tools_rubric.yml   generated
   every instructing sentence, in the          └── detectors/         yours + generated
   cheapest shape that decides it
 ```
@@ -107,7 +158,7 @@ Each instruction is given the first shape that can decide it:
 
 | The instruction is about | Becomes |
 |---|---|
-| What the agent runs, searches or opens ("use pnpm, never npm") | a read rule: `tools` + `pattern` and/or `files` |
+| What the agent runs, searches or opens ("use pnpm, never npm") | a tool rule: `tools` + `pattern` and/or `files` |
 | A place rather than particular code ("never edit `db/schema.rb`") | a write rule on `files` alone |
 | Something a regex decides exactly ("no `default_scope`") | a write rule with `pattern` |
 | Counting, measuring, or a lookup in another file | a rule plus a small generated [detector](#detectors) |
@@ -135,11 +186,11 @@ no_default_scope:
 ```
 
 - **Rules come only from your files.** The command never adds one it thinks you should have, and every rule quotes its line.
-- **The rubric files are rewritten on every compile.** Keep hand-written rules in `write.yml` and `read.yml`.
+- **The rubric files are rewritten on every compile.** Keep hand-written rules in `write.yml` and `tools.yml`.
 - **Read the generated detectors.** They are code that runs in your hooks.
 - **`judge` rules need a judge configured**; the rest work offline.
 
-`bin/rules-rubric.rb` is the deterministic half:
+`bin/rules-rubric.rb` is the deterministic half of the command:
 
 | Command | Does |
 |---|---|
@@ -171,7 +222,7 @@ module Detectors
 end
 ```
 
-A write detector receives `file_path:`, `relative_path:`, `new_content:`, and `session_id:`. A read detector receives `tool:`, `tool_input:`, and `session_id:`. Both also receive `rule:`, the rule's own YAML hash, so a detector can read extra configuration declared alongside the rule. Always accept `**` for forward compatibility.
+A write detector receives `file_path:`, `relative_path:`, `new_content:`, and `session_id:`. A tool detector receives `tool:`, `tool_input:`, and `session_id:`. Both also receive `rule:`, the rule's own YAML hash, so a detector can read extra configuration declared alongside the rule. Always accept `**` for forward compatibility.
 
 That `rule:` hash is how a detector stays stack agnostic instead of hard coding one framework's layout. The bundled `broad_search_advisory` reads a `roots:` list from its rule (`roots: [app, lib, spec, config]` in the Rails preset, with a generic fallback), so the same code flags broad searches in a Node or Go repo once you point `roots:` at `src`, `cmd`, or `internal`.
 
@@ -223,6 +274,7 @@ glob, pattern, detector rules           `judge:` rules only
 - **One turn is kept open at most twice**: the first finding, then one re-check of whatever the agent changed in response. Anything after that goes to you as a `systemMessage` and the turn ends.
 - **A finding the agent leaves alone does not come back.** Only files that moved since the last `Stop` are asked about.
 - **Your own edits between turns are not judged.** The working tree is recorded again on every prompt.
+- **Write rules only.** `judge:` on a tool rule is skipped; see [what each kind supports](#how-rules-work).
 - **A detector file still wins.** A rule with one is decided before the write as usual and never sent to the judge.
 - **It is opt in and fails open.** With no key and no URL set, nothing is sent. If the judge is unreachable, `judge:` rules stay silent.
 
@@ -233,11 +285,11 @@ It needs a git repo, like the post-write sweep, and it stays silent when more th
 | `RULEKIT_JUDGE_API_KEY` | unset | Bearer token. Falls back to `TYPESAFE_AI_API_KEY` |
 | `RULEKIT_JUDGE_URL` | `https://api.typesafe.ai/v1` | API base. Falls back to `TYPESAFE_AI_BASE_URL` |
 | `RULEKIT_JUDGE_MODEL` | `jev-latest` | Model id |
-| `RULEKIT_JUDGE_TIMEOUT` | `10.0` | Read timeout, seconds |
+| `RULEKIT_JUDGE_TIMEOUT` | `10.0` | Read timeout, seconds. Anything that is not a positive number falls back to the default |
 
 The judge is on once either the key or the URL is set. For Jev that means a key. Any server that speaks the same `POST {url}/systemone` protocol works as a drop-in: set the URL and model, and a key only if it wants one.
 
-Rulekit sends the file path and the lines the turn added to that file (truncated to 8000 characters) to the judge. Leave `judge:` off rules that cover files you would not send to a third party.
+What is sent, and what happens when the judge is down, is under [Cost, privacy, safety](#cost-privacy-safety).
 
 `test/judge.sh` exercises all of this against a fake server, so it runs without a key.
 
@@ -292,9 +344,39 @@ PostToolUse(*)          →  rules see the lines that did get written
 
 The sweep is not a substitute for the pre-write hooks; catching a write before it happens is strictly better. It is the backstop for when the agent takes a route the matchers do not cover.
 
+## Cost, privacy, safety
+
+- **Deterministic rules send nothing anywhere.** Glob, regex and detector rules run locally and need no key.
+- **The judge is opt in.** With no key and no URL set, nothing is sent and `judge:` rules stay silent.
+- **What the judge sees:** the file path and the lines the turn added to that file, cut at 8000 characters, and only for files a `judge:` rule covers. Never the conversation. Leave `judge:` off rules that cover files you would not send to a third party.
+- **What it costs:** one request per changed file per turn, carrying every matching `judge:` rule as a question. A rule's `pattern` runs first, so the judge is only asked when it could matter.
+- **It fails open.** An unreachable judge, a timeout or a bad response leaves `judge:` rules silent, and the judge is marked down for 60 seconds so an outage costs one attempt, not one per file.
+- **The model is yours to choose.** The default is [Jev](https://typesafe.ai), TypeSafe's hosted decision model. Any server that speaks the same protocol works by setting `RULEKIT_JUDGE_URL`.
+
+## How it hooks in
+
+| Event | Runs | Does |
+|---|---|---|
+| `PreToolUse` on `Edit`, `MultiEdit`, `Write` | `write-rules-check.rb` | Write rules against the content about to be written |
+| `PreToolUse` on `Bash`, `Grep`, `Glob`, `Read` | `tool-rules-check.rb` | Tool rules against the command, search or path |
+| `PostToolUse` on every tool | `post-write-sweep.rb` | The same write rules against what changed on disk |
+| `UserPromptSubmit` | `stop-rules-check.rb --record` | Records the working tree, so your own edits between turns are not judged |
+| `Stop` | `stop-rules-check.rb` | `judge:` rules against what the turn added |
+| `SessionStart` | cleanup, then both recorders | Clears the session's "once" sentinels and records the starting state |
+
+## Also in this marketplace: exhalekit
+
+Rulekit guards the inhale: it keeps conventions in view at the moment the agent writes code. [**exhalekit**](plugins/exhalekit/README.md) guards the exhale: a `PostToolUse` hook that fires after every non-refactor commit and makes the agent review what it just built for duplication and design drift, backed by a diff-scoped rubycritic run so the review has evidence behind it.
+
+```
+/plugin install exhalekit@rulekit
+```
+
+The two are independent; install either, or both. Exhalekit needs **`jq`**; its `/exhale-init` additionally assumes a Ruby project with Bundler, since the `diff-quality` script it installs shells out to `bundle exec rubycritic`. The hook itself is language agnostic and degrades to a plain reminder where that script is absent.
+
 ## Repo layout
 
-This repo is a marketplace, not a plugin. The root holds only marketplace metadata and docs; every plugin lives under `plugins/<name>/`, matching the convention Anthropic's own marketplace uses.
+This repo is a marketplace, not a plugin. Rulekit's manifest is at `plugins/rulekit/.claude-plugin/plugin.json` and the marketplace metadata at `.claude-plugin/marketplace.json`. The root holds only marketplace metadata and docs; every plugin lives under `plugins/<name>/`, matching the convention Anthropic's own marketplace uses.
 
 Inside a plugin, the `hooks/`, `commands/`, and `skills/` directories are discovered automatically. A plugin manifest must **not** name them — doing so registers them twice and the loader rejects the plugin outright.
 
@@ -310,10 +392,10 @@ claude-rulekit/
     │   ├── .claude-plugin/
     │   │   └── plugin.json                   # name, version, keywords only
     │   ├── hooks/
-    │   │   └── hooks.json                    # PreToolUse (write + read), PostToolUse, Stop, UserPromptSubmit, SessionStart
+    │   │   └── hooks.json                    # PreToolUse (write + tool), PostToolUse, Stop, UserPromptSubmit, SessionStart
     │   ├── bin/
     │   │   ├── write-rules-check.rb          # Edit/MultiEdit/Write engine
-    │   │   ├── read-rules-check.rb           # Bash/Grep/Glob engine
+    │   │   ├── tool-rules-check.rb           # Bash/Grep/Glob/Read engine
     │   │   ├── post-write-sweep.rb           # replays write.yml over writes that bypassed the tools
     │   │   ├── stop-rules-check.rb           # judges `judge:` rules over the turn's changes on Stop
     │   │   ├── rules-rubric.rb               # sources + validate for /rules-compile
@@ -336,7 +418,7 @@ claude-rulekit/
     │   └── presets/
     │       └── rails/                        # copied in by /rules-init rails
     │           ├── write.yml                 # 15 rules
-    │           ├── read.yml                  # 1 rule
+    │           ├── tools.yml                 # 1 rule
     │           ├── detectors/
     │           │   ├── broad_search_advisory.rb
     │           │   ├── migration_backfill.rb
@@ -368,9 +450,9 @@ Adding a third plugin means a new directory under `plugins/` and one more entry 
 
 ## Presets
 
-`plugins/rulekit/presets/rails/` is a portable set of opinionated Rails conventions generalized from a real production app: fifteen write rules (no `default_scope`, the service object DDD check, the migration safety checklist, `NOT NULL` + backfill in one migration, unindexed foreign keys, `.all.map` instead of SQL, model queries in views, fat model nudges, heavy spec setup, SQL-injection interpolation, bare `rescue`, model references in migrations, missing HTTP timeouts, and uniqueness-without-index) and one read rule that narrows broad repo searches. See [`plugins/rulekit/presets/rails/README.md`](plugins/rulekit/presets/rails/README.md) for the full table and the opinions each rule encodes.
+`plugins/rulekit/presets/rails/` is a portable set of opinionated Rails conventions generalized from a real production app: fifteen write rules (no `default_scope`, the service object DDD check, the migration safety checklist, `NOT NULL` + backfill in one migration, unindexed foreign keys, `.all.map` instead of SQL, model queries in views, fat model nudges, heavy spec setup, SQL-injection interpolation, bare `rescue`, model references in migrations, missing HTTP timeouts, and uniqueness-without-index) and one tool rule that narrows broad repo searches. See [`plugins/rulekit/presets/rails/README.md`](plugins/rulekit/presets/rails/README.md) for the full table and the opinions each rule encodes.
 
-Presets for other stacks are welcome. A preset is just a `write.yml`, a `read.yml`, and an optional `detectors/` directory.
+Presets for other stacks are welcome. A preset is just a `write.yml`, a `tools.yml`, and an optional `detectors/` directory.
 
 ## Credit
 

@@ -7,7 +7,12 @@ enforce at the moment of an edit, a search or a command. The output is two
 files beside the hand-written ones, in the same format:
 
 - `.claude/rules/write_rubric.yml` — loaded together with `write.yml`
-- `.claude/rules/read_rubric.yml` — loaded together with `read.yml`
+- `.claude/rules/tools_rubric.yml` — loaded together with `tools.yml`
+
+Tool rules were called read rules. If the project still has `read_rubric.yml`,
+write `tools_rubric.yml` and delete the old file; it is ignored once the new
+one exists. A hand-written `read.yml` is the user's: read it as you would
+`tools.yml` and leave it where it is.
 
 Two facts before you start:
 
@@ -17,7 +22,7 @@ Two facts before you start:
   line they can point at, in their wording.
 
 The rubric files belong to this command and are rewritten on every run. Never
-edit `write.yml`, `read.yml` or an existing detector that is not yours.
+edit `write.yml`, `tools.yml` or an existing detector that is not yours.
 
 ## Step 1. Find and read the sources
 
@@ -36,7 +41,7 @@ Read every listed file in full. Then:
   `apps/web/CLAUDE.md` (scope `apps/web/**/*`) gets globs under `apps/web/`.
 - Read a file marked optional only for sentences that instruct. How to open a
   pull request is not a rule.
-- Read `.claude/rules/write.yml`, `.claude/rules/read.yml` and the names in
+- Read `.claude/rules/write.yml`, `.claude/rules/tools.yml` and the names in
   `.claude/rules/detectors/` if they exist. Rule names are unique across all
   four files, and a rule the user already wrote by hand is not compiled again.
 
@@ -66,9 +71,9 @@ act before the write; later ones cost more and know less.
 
 | # | Question | Shape | Lands in |
 |---|---|---|---|
-| 1 | Is it about what the agent runs, searches for or opens? ("use pnpm, never npm", "no AI attribution in commits", "check schema.rb before searching", "do not read `legacy/`") | read rule: `tools` + `pattern` and/or `files` | `read_rubric.yml` |
+| 1 | Is it about what the agent runs, searches for or opens? ("use pnpm, never npm", "no AI attribution in commits", "check schema.rb before searching", "do not read `legacy/`") | tool rule: `tools` + `pattern` and/or `files` | `tools_rubric.yml` |
 | 2 | Can a regex over the new code decide it exactly? (`default_scope`, `console.log`, `interface Foo`, `binding.pry`) | write rule with `pattern` | `write_rubric.yml` |
-| 3 | Would a few lines of Ruby decide it exactly, where a regex cannot: counting, measuring, or a look at another file in the repo? (line caps, "a uniqueness validation needs a unique index") | write or read rule + detector | rubric + `detectors/<name>.rb` |
+| 3 | Would a few lines of Ruby decide it exactly, where a regex cannot: counting, measuring, or a look at another file in the repo? (line caps, "a uniqueness validation needs a unique index") | write or tool rule + detector | rubric + `detectors/<name>.rb` |
 | 4 | Is it about a place rather than about particular code? ("never edit `db/schema.rb` by hand", "services coordinate several models") | write rule on `files` alone | `write_rubric.yml` |
 | 5 | Could a reviewer decide it from the lines added to one file and nothing else? (a comment that restates the code, raw error text reaching a user, a hand-rolled retry loop) | write rule with `judge` | `write_rubric.yml` |
 | 6 | None of the above. | not a rule | `_rubric.skipped`, with the reason |
@@ -95,7 +100,7 @@ What decides it is how sure the match is, then how firm the wording is:
 | Can be legitimate, or the wording is soft ("avoid", "prefer", "usually") | `block_once` (denies once, lets the retry through) |
 | A reminder for a place, or anything decided by `judge` | `warn`, with `once_per_session: true` for place reminders |
 
-Read rules have no `block_once`. A `judge` answer is a probability: keep it to
+Tool rules have no `block_once`. A `judge` answer is a probability: keep it to
 `warn` unless the user's wording is absolute and the question is narrow.
 
 ## Step 4. Write each rule
@@ -126,7 +131,7 @@ A **Ruby** regex.
   text of an edit, which may be one line out of the middle of a file. Do not
   rely on anything outside the lines being written. `^` and `$` match at line
   boundaries.
-- On a read rule it is matched against what the tool was asked for: the
+- On a tool rule it is matched against what the tool was asked for: the
   command for `Bash`, the search pattern for `Grep`/`Glob`, the path for
   `Read`.
 - Match the offence, not the topic: `(?<!\w)default_scope(?!\w)`, not `scope`.
@@ -174,7 +179,7 @@ module Detectors
   module ControllerActionLength          # CamelCase of the rule name
     def self.call(file_path:, new_content:, rule:, **)
       # write rules also get relative_path:, session_id:
-      # read rules get tool:, tool_input:, session_id:, rule:
+      # tool rules get tool:, tool_input:, session_id:, rule:
       new_content.lines.size > rule.fetch('max_lines', 30)
     end
   end
@@ -212,7 +217,7 @@ source: "CLAUDE.md:41"
 ### Names
 
 `snake_case`, saying what the rule catches (`no_default_scope`,
-`raw_error_to_user`). Unique across `write.yml`, `read.yml` and both rubric
+`raw_error_to_user`). Unique across `write.yml`, `tools.yml` and both rubric
 files. When recompiling, keep the name a rule already has.
 
 ## Step 5. Write the files
@@ -269,7 +274,7 @@ raw_error_to_user:
 ```
 
 ```yaml
-# .claude/rules/read_rubric.yml
+# .claude/rules/tools_rubric.yml
 # Generated by /rules-compile. Do not edit by hand; see write_rubric.yml.
 
 _rubric:
@@ -306,7 +311,7 @@ Rules of the files:
 - Write a file even when it holds no rules, so its sources are recorded.
   If neither side has a single rule, write nothing and tell the user.
 - `tools` defaults to `[Bash, Grep, Glob]`; name `Read` explicitly to fire
-  when a file is opened. A read rule with `files` never matches `Bash`.
+  when a file is opened. A tool rule with `files` never matches `Bash`.
 
 ## Step 6. Validate, then try the rules
 
@@ -323,7 +328,7 @@ root. Give every payload its own `session_id`: `block_once` and
 echo '{"tool_name":"Write","session_id":"rules-compile-1","tool_input":{"file_path":"'"$PWD"'/app/models/x.rb","content":"default_scope { where(active: true) }"}}' \
   | "${CLAUDE_PLUGIN_ROOT}/bin/write-rules-check.rb"
 echo '{"tool_name":"Bash","session_id":"rules-compile-2","tool_input":{"command":"npm install left-pad"}}' \
-  | "${CLAUDE_PLUGIN_ROOT}/bin/read-rules-check.rb"
+  | "${CLAUDE_PLUGIN_ROOT}/bin/tool-rules-check.rb"
 ```
 
 Firing looks like this; passing prints nothing and exits 0:
@@ -340,7 +345,7 @@ not sent anything. Remove `tmp/.claude-advisory/rules-compile*` when done.
 ## Step 7. Report
 
 Tell the user in a few plain sentences: how many instructions were found; how
-many became rules, split by shape (pattern, files only, detector, judge, read;
+many became rules, split by shape (pattern, files only, detector, judge, tool;
 `validate` prints files-only rules as "match only");
 how many were skipped and the main reasons; whether any detectors were
 generated, since those are code they should read; and that `judge` rules only

@@ -3,10 +3,10 @@ require 'json'
 require 'yaml'
 require_relative 'judge_client'
 
-# Shared engine for write-rules-check.rb, read-rules-check.rb,
+# Shared engine for write-rules-check.rb, tool-rules-check.rb,
 # post-write-sweep.rb and stop-rules-check.rb.
 #
-# The read hook handles its own tool-name gating and calls `record` directly.
+# The tool hook handles its own tool-name gating and calls `record` directly.
 # The two write-side hooks share `apply_write_rules`, which does the glob /
 # pattern / detector matching for one (path, content) pair — the pre-write hook
 # supplies content from the tool call, the sweep supplies it from the diff.
@@ -41,19 +41,31 @@ class RulesRunner
     override.empty? ? File.join(project_dir, '.claude', 'rules') : override
   end
 
-  # The rules for one side ('write' or 'read'): the hand-written <kind>.yml and
+  # The rules for one side ('write' or 'tools'): the hand-written <kind>.yml and
   # the <kind>_rubric.yml that /rules-compile generates from the project's
   # instruction files, as one hash. On a name clash the hand-written rule wins.
   # Entries that are not rules (the rubric's `_rubric` metadata) ride along and
   # are skipped by every hook, as anything without a known `type` is.
   def self.load_rules(project_dir, kind)
-    ["#{kind}_rubric.yml", "#{kind}.yml"].each_with_object({}) do |name, rules|
-      path = File.join(rules_dir(project_dir), name)
-      next unless File.exist?(path)
+    ['_rubric', ''].each_with_object({}) do |suffix, rules|
+      path = rules_file(project_dir, kind, suffix)
+      next if path.nil?
 
       loaded = YAML.safe_load_file(path)
       rules.merge!(loaded) if loaded.is_a?(Hash)
     end
+  end
+
+  # Tool rules were called read rules, in read.yml and read_rubric.yml. A
+  # project that still has those keeps working until it renames them.
+  LEGACY_KINDS = { 'tools' => 'read' }.freeze
+
+  # Path of <kind><suffix>.yml, or of its legacy name when only that exists.
+  # nil when neither does.
+  def self.rules_file(project_dir, kind, suffix = '')
+    [kind, LEGACY_KINDS[kind]].compact
+                              .map { |name| File.join(rules_dir(project_dir), "#{name}#{suffix}.yml") }
+                              .find { |path| File.exist?(path) }
   end
 
   # Per-session scratch dir backing sentinels and the sweep's snapshots.
@@ -176,7 +188,7 @@ class RulesRunner
   end
 
   # True when the rule has no `pattern`, or its regex matches `content`: the
-  # new code for a write rule, the command or search for a read rule.
+  # new code for a write rule, what the tool was asked for on a tool rule.
   def matches_pattern?(rule, name, content)
     pattern = rule['pattern'].to_s
     return true if pattern.empty?

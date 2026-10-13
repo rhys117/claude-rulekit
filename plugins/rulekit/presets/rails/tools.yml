@@ -1,5 +1,5 @@
-# Advisory rules enforced by the read-rules check on
-# Bash / Grep / Glob tool calls.
+# Tool rules: matched against what the agent asks a tool to do, before the
+# Bash / Grep / Glob / Read call runs.
 #
 # Each rule:
 #   type:              "block" (deny tool call) or "warn" (inject context)
@@ -24,7 +24,7 @@
 # given fire. A detector also receives the rule's own YAML hash, so any extra
 # keys here (like `roots:` below) are configuration the detector can read.
 #
-# Rule names must be unique across read.yml AND write.yml — both scripts
+# Rule names must be unique across tools.yml AND write.yml — both scripts
 # share the same per-session sentinel namespace.
 
 broad_search_advisory:

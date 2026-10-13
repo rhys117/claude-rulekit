@@ -28,9 +28,9 @@ These fire on `Edit`, `MultiEdit`, and `Write` tool calls.
 
 ---
 
-## Read rules
+## Tool rules
 
-These fire on `Bash`, `Grep`, and `Glob` tool calls.
+These fire before `Bash`, `Grep`, and `Glob` tool calls, and before `Read` when a rule lists it in `tools`.
 
 | Rule | Type | Triggers on | Tells the agent |
 |---|---|---|---|
@@ -40,7 +40,7 @@ These fire on `Bash`, `Grep`, and `Glob` tool calls.
 
 ## Detector-backed rules
 
-Six rules delegate their fire/no-fire decision to a Ruby detector in `detectors/`. The detector receives the file path and content (for write rules) or the tool name and input (for read rules).
+Six rules delegate their fire/no-fire decision to a Ruby detector in `detectors/`. The detector receives the file path and content (for write rules) or the tool name and input (for tool rules).
 
 | Rule | Detector inspects |
 |---|---|
@@ -76,7 +76,7 @@ When it fires, it doesn't dump the type conventions into the agent's context. It
 
 ## Add your own rule
 
-A rule is a YAML entry keyed by a unique name. Put edit-time rules in `write.yml` and search-time rules in `read.yml`:
+A rule is a YAML entry keyed by a unique name. Put rules about the content of an edit in `write.yml` and rules about what a tool is asked to do (a command, a search, a file being opened) in `tools.yml`:
 
 ```yaml
 no_raw_execute:
@@ -102,10 +102,10 @@ module Detectors
 end
 ```
 
-The module name is the CamelCase of the rule name. The full field list, the detector return contract, and the read-side `roots:` style config are documented in the [top-level README](../../README.md#how-rules-work).
+The module name is the CamelCase of the rule name. The full field list, the detector return contract, and the `roots:` style config for tool rules are documented in the [top-level README](../../README.md#how-rules-work).
 
 ---
 
 ## Testing
 
-`./test.sh` smoke-tests this preset against the rulekit engine. It pipes synthetic `PreToolUse` events through `bin/write-rules-check.rb` and `bin/read-rules-check.rb` with `CLAUDE_RULES_DIR` pointed here, and asserts each rule fires (or stays silent) as intended, including the detector-backed rules, the `block_once` retry, `once_per_session`, and the read-side `roots:` config. Run it after editing any rule or detector. It builds a throwaway project with `mktemp` and cleans up after itself, so it touches no repo state.
+`./test.sh` smoke-tests this preset against the rulekit engine. It pipes synthetic `PreToolUse` events through `bin/write-rules-check.rb` and `bin/tool-rules-check.rb` with `CLAUDE_RULES_DIR` pointed here, and asserts each rule fires (or stays silent) as intended, including the detector-backed rules, the `block_once` retry, `once_per_session`, and the read-side `roots:` config. Run it after editing any rule or detector. It builds a throwaway project with `mktemp` and cleans up after itself, so it touches no repo state.

@@ -35,11 +35,13 @@ require 'uri'
 #   RULEKIT_JUDGE_URL      API base (default https://api.typesafe.ai/v1).
 #                          Falls back to TYPESAFE_AI_BASE_URL.
 #   RULEKIT_JUDGE_MODEL    model id (default jev-latest)
-#   RULEKIT_JUDGE_TIMEOUT  read timeout in seconds (default 10.0)
+#   RULEKIT_JUDGE_TIMEOUT  read timeout in seconds (default 10.0). A value
+#                          that is not a positive number falls back to it.
 class JudgeClient
   DEFAULT_URL = 'https://api.typesafe.ai/v1'.freeze
   DEFAULT_MODEL = 'jev-latest'.freeze
   DEFAULT_THRESHOLD = 0.7
+  DEFAULT_TIMEOUT = 10.0
   OPEN_TIMEOUT = 3.0
   DOWN_TTL = 60
   # Largest per-file state sent. Beyond this the added lines are cut.
@@ -49,7 +51,7 @@ class JudgeClient
     new(
       url: env('RULEKIT_JUDGE_URL', 'TYPESAFE_AI_BASE_URL'),
       model: env('RULEKIT_JUDGE_MODEL') || DEFAULT_MODEL,
-      read_timeout: Float(env('RULEKIT_JUDGE_TIMEOUT') || '10.0'),
+      read_timeout: timeout(env('RULEKIT_JUDGE_TIMEOUT')),
       api_key: env('RULEKIT_JUDGE_API_KEY', 'TYPESAFE_AI_API_KEY'),
       down_marker: File.join(session_dir, 'judge-down'),
     )
@@ -58,6 +60,11 @@ class JudgeClient
   # The first of `names` set to something non-empty.
   def self.env(*names)
     names.map { |name| ENV[name].to_s }.find { |value| !value.empty? }
+  end
+
+  def self.timeout(value)
+    seconds = Float(value, exception: false)
+    seconds&.positive? ? seconds : DEFAULT_TIMEOUT
   end
 
   def initialize(url:, model:, read_timeout:, api_key:, down_marker:)

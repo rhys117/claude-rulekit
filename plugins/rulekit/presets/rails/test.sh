@@ -2,10 +2,10 @@
 # test.sh — Smoke-test the rulekit Rails preset against the rulekit engine.
 #
 # Pipes synthetic Claude Code events into bin/write-rules-check.rb,
-# bin/read-rules-check.rb and bin/post-write-sweep.rb with CLAUDE_RULES_DIR
+# bin/tool-rules-check.rb and bin/post-write-sweep.rb with CLAUDE_RULES_DIR
 # pointed at this preset, then asserts on stdout + exit code. Every rule gets a
 # positive case and, where it matters, a negative one; the detector-backed
-# rules, block_once, and the read-side `roots:` config are all exercised. The
+# rules, block_once, and the tool-rule `roots:` config are all exercised. The
 # final section drives the sweep against a throwaway git repo, since it reads
 # the working tree rather than the tool call.
 #
@@ -21,7 +21,7 @@ set -uo pipefail
 PLUGIN_ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 PRESET="$PLUGIN_ROOT/presets/rails"
 W="$PLUGIN_ROOT/bin/write-rules-check.rb"
-R="$PLUGIN_ROOT/bin/read-rules-check.rb"
+R="$PLUGIN_ROOT/bin/tool-rules-check.rb"
 S="$PLUGIN_ROOT/bin/post-write-sweep.rb"
 
 command -v ruby >/dev/null || { echo "ruby not found on PATH"; exit 1; }
@@ -71,7 +71,7 @@ assert_exit() {
   else echo "  FAIL  $label exit (want $expected, got $actual)"; FAIL=$((FAIL+1)); fi
 }
 
-echo "==> read.yml"
+echo "==> tools.yml"
 
 SID="r-broad-bash"
 P='{"tool_name":"Bash","session_id":"'"$SID"'","tool_input":{"command":"grep -r foo app/"}}'

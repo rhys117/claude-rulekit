@@ -16,7 +16,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "${CLAUDE_PLUGIN_ROOT}/bin/read-rules-check.rb",
+            "command": "${CLAUDE_PLUGIN_ROOT}/bin/tool-rules-check.rb",
             "timeout": 5
           }
         ]

@@ -1,9 +1,9 @@
 module Detectors
-  # Flags broad, unscoped repo searches so the advisory in read.yml can nudge
+  # Flags broad, unscoped repo searches so the advisory in tools.yml can nudge
   # the agent to narrow first.
   #
   # The directories treated as "broad source roots" are read from the rule's
-  # `roots:` list in read.yml. That keeps the stack-specific part as data: this
+  # `roots:` list in tools.yml. That keeps the stack-specific part as data: this
   # preset sets Rails roots (app, lib, spec, config), but a Node or Go preset
   # can set src, cmd, internal, etc. without touching this code. When no roots
   # are configured a generic fallback is used, so the detector is never tied to

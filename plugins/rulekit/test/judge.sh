@@ -218,6 +218,11 @@ OUT=$(RULEKIT_JUDGE_URL= RULEKIT_JUDGE_API_KEY= TYPESAFE_AI_BASE_URL="$URL" TYPE
 assert_contains "typesafe env names still work" "$OUT" "022_x.rb"
 assert_contains "typesafe key is sent" "$(tail -1 "$LOG")" "Bearer ts-key"
 
+record s4
+write db/migrate/023_x.rb 'backfill'
+OUT=$(RULEKIT_JUDGE_TIMEOUT=soon stop s4 2>&1); EC=$?
+assert_contains "an unusable timeout falls back to the default" "$OUT" "023_x.rb"
+
 echo "==> judge: fails open"
 
 kill "$SERVER_PID" 2>/dev/null; wait "$SERVER_PID" 2>/dev/null

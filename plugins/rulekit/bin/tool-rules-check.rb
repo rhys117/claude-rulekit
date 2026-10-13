@@ -1,8 +1,13 @@
 #!/usr/bin/env ruby
-# read-rules-check.rb - Enforce advisory rules on Bash / Grep / Glob.
+# tool-rules-check.rb - Enforce rules on what the agent asks a tool to do.
+#
+# Runs before a Bash / Grep / Glob / Read call and matches the request itself
+# (the command, the search, the path), where write-rules-check.rb matches the
+# content of an edit. These were "read rules" in read.yml; that file and
+# read_rubric.yml are still loaded when the new names are absent.
 #
 # Reads stdin JSON from Claude Code and applies rules from
-# <project>/.claude/rules/read.yml and the generated read_rubric.yml beside it
+# <project>/.claude/rules/tools.yml and the generated tools_rubric.yml beside it
 # (override the dir with CLAUDE_RULES_DIR).
 # Each YAML rule:
 #
@@ -26,6 +31,10 @@
 #   once_per_session:  Optional, warn-only. When true the rule fires at most
 #                      once per session (sentinel under tmp/.claude-advisory/).
 #                      Block rules ignore this flag.
+#
+# `judge:` and `block_once` are write-rule keys. A tool rule is decided before
+# the call, with no model in the loop; one that carries `judge:` is skipped
+# rather than fired on the bare match.
 #
 # Per-rule detection logic lives in Ruby files at
 # <project>/.claude/rules/detectors/<rule_name>.rb. A detector defines:
@@ -52,20 +61,20 @@
 require 'json'
 require_relative '../lib/rules_runner'
 
-# Tools this hook may fire on. Rules without an explicit `tools:` default to the
-# search tools only, so firing on Read is opt-in per rule.
-READ_TOOLS = %w[Read Bash Grep Glob].freeze
+# Tools this hook may fire on. Rules without an explicit `tools:` default to
+# Bash and the search tools, so firing on Read is opt-in per rule.
+SUPPORTED_TOOLS = %w[Read Bash Grep Glob].freeze
 DEFAULT_TOOLS = %w[Bash Grep Glob].freeze
 
 input = JSON.parse($stdin.read)
 tool = input['tool_name']
-exit 0 unless READ_TOOLS.include?(tool)
+exit 0 unless SUPPORTED_TOOLS.include?(tool)
 
 session_id = input['session_id'].to_s
 tool_input = input['tool_input'] || {}
 
 project_dir = ENV['CLAUDE_PROJECT_DIR'].to_s
-rules = RulesRunner.load_rules(project_dir, 'read')
+rules = RulesRunner.load_rules(project_dir, 'tools')
 exit 0 if rules.empty?
 
 # Path the tool touches, used for `files` globs: the file_path it reads, or the
@@ -80,7 +89,7 @@ end
 # What the tool was asked for, used for `pattern`.
 subject = (tool_input['command'] || tool_input['pattern'] || tool_input['file_path']).to_s
 
-runner = RulesRunner.from_env(script_name: 'read-rules-check', project_dir: project_dir, session_id: session_id)
+runner = RulesRunner.from_env(script_name: 'tool-rules-check', project_dir: project_dir, session_id: session_id)
 
 rules.each do |name, rule|
   next unless rule.is_a?(Hash)
@@ -92,7 +101,12 @@ rules.each do |name, rule|
   allowed_tools = DEFAULT_TOOLS if allowed_tools.empty?
   next unless allowed_tools.include?(tool)
 
-  # Unlike a write rule, a read rule without `files` applies to every path.
+  if rule.key?('judge')
+    warn "[tool-rules-check] rule '#{name}' skipped: judge is not supported on tool rules"
+    next
+  end
+
+  # Unlike a write rule, a tool rule without `files` applies to every path.
   unless Array(rule['files']).empty?
     next if target_path.empty?
     next unless runner.matches_globs?(Array(rule['files']), relative_path, target_path)
