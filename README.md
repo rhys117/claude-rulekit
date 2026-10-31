@@ -316,6 +316,7 @@ glob, pattern, detector rules           `judge:` rules only
 - **One turn is kept open at most twice**: the first finding, then one re-check of whatever the agent changed in response. Anything after that goes to you as a `systemMessage` and the turn ends.
 - **A finding the agent leaves alone does not come back.** Only files that moved since the last `Stop` are asked about.
 - **Your own edits between turns are not judged.** The working tree is recorded again on every prompt.
+- **Committing before `Stop` does not dodge the judge.** Files touched by commits made since the prompt are judged too, against their content when the turn began. Merge commits, and what they bring in from other branches, are left out.
 - **Write rules only.** `judge:` on a tool rule is skipped; see [what each kind supports](#how-rules-work).
 - **A detector file still wins.** A rule with one is decided before the write as usual and never sent to the judge.
 - **It is opt in and fails open.** With no key and no URL set, nothing is sent. If the judge is unreachable, `judge:` rules stay silent.
