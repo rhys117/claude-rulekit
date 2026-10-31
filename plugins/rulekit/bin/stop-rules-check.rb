@@ -13,8 +13,10 @@
 # Same machinery as post-write-sweep.rb (lib/working_tree.rb), with its own
 # snapshots under tmp/.claude-advisory/<session_id>/turn-snapshots/. Run with
 # --record on SessionStart and UserPromptSubmit, it notes the state of the
-# working tree without asking anything, so edits the user made between turns
-# are not pinned on the agent. On Stop it sends each file's lines added since
+# working tree and the HEAD commit without asking anything, so edits the user
+# made between turns are not pinned on the agent. Files the turn committed are
+# no longer dirty by Stop, so the commits since that HEAD (merges aside) add to
+# what git status reports. On Stop it sends each file's lines added since
 # then — one request per file, carrying every `judge:` rule that matched — and
 # records the new state. A file that has not moved since the last Stop is not
 # asked about again, so a finding the agent chose to leave does not come back.
@@ -75,7 +77,18 @@ session_dir = RulesRunner.session_dir(project_dir, session_id)
 snapshots = WorkingTree::Snapshots.new(File.join(session_dir, 'turn-snapshots'))
 was_initialized = snapshots.initialized?
 
-changes = WorkingTree.moved_files(project_dir, snapshots)
+# The commit the turn started from, so work the agent committed before
+# stopping is judged too. Re-read on every pass, so a turn's Stops agree.
+turn_base = File.join(session_dir, 'turn-base')
+if record_only || !File.exist?(turn_base)
+  head = WorkingTree.git(project_dir, 'rev-parse', 'HEAD')&.strip
+  FileUtils.mkdir_p(session_dir)
+  File.write(turn_base, head.to_s)
+end
+since = File.read(turn_base).strip
+since = nil if since.empty?
+
+changes = WorkingTree.moved_files(project_dir, snapshots, since: since)
 exit 0 if changes.nil?
 
 silent = record_only ||

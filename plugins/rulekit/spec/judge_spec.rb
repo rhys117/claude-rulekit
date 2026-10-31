@@ -162,6 +162,43 @@ RSpec.describe 'judge rules' do
       expect(judge.requests.last.state).not_to include('add_index'), 'only the lines added since HEAD are sent'
     end
 
+    it 'judges what the turn committed, against the commit the turn started from' do
+      project.write('db/migrate/002_x.rb', "add_index :users, :email\n")
+      project.git_commit_all('before the turn')
+      project.record('s2')
+      add 'db/migrate/002_x.rb', 'User.find_each { backfill slug }'
+      project.git_commit_all('during the turn')
+
+      expect(project.stop('s2')).to fire('semantic_backfill')
+      expect(judge.requests.size).to eq(1)
+      expect(judge.requests.last.state).not_to include('add_index'), 'lines from before the turn are not sent'
+    end
+
+    it 'judges only what the turn added to a file that was already dirty, once committed' do
+      project.write('db/migrate/002_x.rb', "add_index :users, :email\n")
+      project.git_commit_all('before the turn')
+      add 'db/migrate/002_x.rb', 'remove_index :users, :name'
+      project.record('s2')
+      add 'db/migrate/002_x.rb', 'User.find_each { backfill slug }'
+      project.git_commit_all('during the turn')
+
+      expect(project.stop('s2')).to fire('semantic_backfill')
+      expect(judge.requests.last.state).not_to include('remove_index'), 'edits made before the turn are not sent'
+    end
+
+    it 'leaves what a merge brought in to the branch that wrote it' do
+      project.git_commit_all('rules')
+      project.git('checkout', '-q', '-b', 'side')
+      add 'db/migrate/005_x.rb', 'User.find_each { backfill slug }'
+      project.git_commit_all('on side')
+      project.git('checkout', '-q', '-')
+      project.record('s2')
+      project.git('-c', 'user.name=t', '-c', 'user.email=t@t', 'merge', '-q', '--no-ff', '-m', 'merge side', 'side')
+
+      expect(project.stop('s2')).to be_silent
+      expect(judge.requests).to be_empty
+    end
+
     it 'returns a warn rule as feedback, skips a pattern miss, and ignores edits made between turns' do
       project.record('s2')
       add 'db/migrate/004_user_edit.rb', 'backfill by hand'

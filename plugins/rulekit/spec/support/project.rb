@@ -66,6 +66,10 @@ class Project
     git('-c', 'user.name=t', '-c', 'user.email=t@t', 'commit', '-q', '-m', message)
   end
 
+  def git(*args)
+    system('git', '-C', @root, *args, out: File::NULL, err: File::NULL, exception: true)
+  end
+
   def session_dir(session)
     path(File.join('tmp', '.claude-advisory', session))
   end
@@ -127,9 +131,5 @@ class Project
     options[:chdir] = chdir if chdir
     stdout, stderr, status = Open3.capture3(environment, File.join(BIN, script), *args, **options)
     HookResult.new(stdout, stderr, status.exitstatus)
-  end
-
-  def git(*args)
-    system('git', '-C', @root, *args, out: File::NULL, err: File::NULL, exception: true)
   end
 end

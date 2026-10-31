@@ -80,8 +80,10 @@ module WorkingTree
     end
   end
 
-  # One dirty file.
-  Change = Struct.new(:code, :repo_path, :absolute, :relative)
+  # One changed file. `base` is the revision its unsnapshotted content is
+  # measured against: HEAD for a dirty tracked file, the caller's `since` for
+  # one a commit since then touched, nil for a file with no committed past.
+  Change = Struct.new(:base, :repo_path, :absolute, :relative)
 
   module_function
 
@@ -113,42 +115,57 @@ module WorkingTree
     entries
   end
 
-  # Everything git calls dirty, narrowed to what has actually moved since
-  # `snapshots` last saw it. A long-lived branch is dirty in dozens of files;
-  # only the handful touched since then are worth reading. Returns nil outside
-  # a git repo. Snapshots of files git no longer calls dirty are dropped: a
-  # deleted untracked file leaves `git status` altogether, as does a tracked
-  # one that was committed or reverted.
-  def moved_files(project_dir, snapshots)
+  # Repo paths touched by the commits made on this branch since `since`,
+  # leaving out merges: a merge brings in other people's history, not code
+  # written here. Empty when HEAD no longer descends from `since` (a reset or
+  # a branch switch), since the commits between them are not this branch's.
+  def committed_paths(project_dir, since)
+    return [] if since.nil? || git(project_dir, 'merge-base', '--is-ancestor', since, 'HEAD').nil?
+
+    git(project_dir, '-c', 'core.quotePath=false', 'log', '--first-parent', '--no-merges',
+        '--format=', '--name-only', "#{since}..HEAD").to_s.lines(chomp: true).reject(&:empty?).uniq
+  end
+
+  # Everything git calls dirty, plus everything committed since `since` when
+  # given, narrowed to what has actually moved since `snapshots` last saw it.
+  # A long-lived branch is dirty in dozens of files; only the handful touched
+  # since then are worth reading. Returns nil outside a git repo. Snapshots of
+  # files outside that set are dropped: a deleted untracked file leaves
+  # `git status` altogether, as does a tracked one that was reverted.
+  def moved_files(project_dir, snapshots, since: nil)
     repo_root = git(project_dir, 'rev-parse', '--show-toplevel')&.strip
     return nil if repo_root.nil? || repo_root.empty?
 
     entries = changed_entries(project_dir)
     return nil if entries.nil?
 
+    committed = committed_paths(project_dir, since)
+    bases = entries.to_h { |code, repo_path| [repo_path, code.start_with?('?') ? nil : 'HEAD'] }
+    committed.each { |repo_path| bases[repo_path] = since }
+
     project_root = real_path(project_dir)
     scratch_root = File.join(project_root, 'tmp', '.claude-advisory')
 
-    dirty = entries.filter_map do |code, repo_path|
+    changed = bases.filter_map do |repo_path, base|
       absolute = File.expand_path(File.join(repo_root, repo_path))
       next unless absolute.start_with?("#{project_root}/")
       next if absolute.start_with?("#{scratch_root}/") # the hooks' own snapshots
       next unless File.file?(absolute)
 
-      Change.new(code, repo_path, absolute, absolute[(project_root.length + 1)..])
+      Change.new(base, repo_path, absolute, absolute[(project_root.length + 1)..])
     end
-    snapshots.keep_only(dirty.map(&:relative))
+    snapshots.keep_only(changed.map(&:relative))
 
-    dirty.select do |change|
+    changed.select do |change|
       File.size(change.absolute) <= MAX_BYTES && snapshots.stale?(change.relative, change.absolute)
     end
   end
 
-  # What `change` looked like when `snapshots` last saw it. With no snapshot
-  # yet, an untracked file is new in full and a tracked one is new since HEAD.
+  # What `change` looked like when `snapshots` last saw it, or failing that, at
+  # its base revision. A file absent there is new in full.
   def baseline(project_dir, snapshots, change)
     snapshots.read(change.relative) ||
-      (change.code.start_with?('?') ? '' : git(project_dir, 'show', "HEAD:#{change.repo_path}").to_s)
+      (change.base ? git(project_dir, 'show', "#{change.base}:#{change.repo_path}").to_s : '')
   end
 
   # Records the current state of each change in `snapshots` and yields it with
