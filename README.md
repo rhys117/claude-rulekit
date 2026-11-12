@@ -315,13 +315,15 @@ glob, pattern, detector rules           `judge:` rules only
 
 - **One turn is kept open at most twice**: the first finding, then one re-check of whatever the agent changed in response. Anything after that goes to you as a `systemMessage` and the turn ends.
 - **A finding the agent leaves alone does not come back.** Only files that moved since the last `Stop` are asked about.
-- **Your own edits between turns are not judged.** The working tree is recorded again on every prompt.
+- **Your own edits between turns are not judged.** The working tree is recorded again on each prompt that starts a new turn. A task notification or a `/compact` mid-turn fires the same hooks, but the record only resets once a `Stop` has let the last turn end, so the agent's own edits stay in view.
 - **Committing before `Stop` does not dodge the judge.** Files touched by commits made since the prompt are judged too, against their content when the turn began. Merge commits, and what they bring in from other branches, are left out.
 - **Write rules only.** `judge:` on a tool rule is skipped; see [what each kind supports](#how-rules-work).
 - **A detector file still wins.** A rule with one is decided before the write as usual and never sent to the judge.
 - **It is opt in and fails open.** With no key and no URL set, nothing is sent. If the judge is unreachable, `judge:` rules stay silent.
 
-It needs a git repo, like the post-write sweep, and it stays silent when more than 25 files changed in one turn. A `/compact` in the middle of a turn resets the record, so edits made before it in that turn are not judged.
+It needs a git repo, like the post-write sweep. It stays silent when more than 100 files a `judge:` rule covers moved at once, since that is history arriving rather than a turn's work; other files do not count. Up to six requests run at a time.
+
+Every pass and request is logged to `tmp/.claude-advisory/<session_id>/judge.log`, one JSON line each: what moved, what was judged, why a pass sent nothing, and each request's file, rules, status and time.
 
 | Env | Default | |
 |---|---|---|
@@ -430,8 +432,8 @@ The sweep is not a substitute for the pre-write hooks; catching a write before i
 
 - **Deterministic rules send nothing anywhere.** Glob, regex and detector rules run locally and need no key.
 - **The judge is opt in.** With no key and no URL set, nothing is sent and `judge:` rules stay silent.
-- **What the judge sees:** the file path and the lines the turn added to that file, cut at 8000 characters, and only for files a `judge:` rule covers. With `RULEKIT_ABIDE_RUBRIC` on, an unscoped Abide rule covers every file. Never the conversation. Leave `judge:` off rules that cover files you would not send to a third party.
-- **What it costs:** one request per changed file per turn, carrying every matching `judge:` rule as a question. A rule's `pattern` runs first, so the judge is only asked when it could matter.
+- **What the judge sees:** the file path and the lines the turn added to that file, in line-aligned parts of up to 8000 characters, and only for files a `judge:` rule covers. With `RULEKIT_ABIDE_RUBRIC` on, an unscoped Abide rule covers every file. Never the conversation. Leave `judge:` off rules that cover files you would not send to a third party.
+- **What it costs:** one request per changed file per turn (one per 8000-character part for a long addition), carrying every matching `judge:` rule as a question. A rule's `pattern` runs first, so the judge is only asked when it could matter.
 - **It fails open.** An unreachable judge, a timeout or a bad response leaves `judge:` rules silent, and the judge is marked down for 60 seconds so an outage costs one attempt, not one per file.
 - **The model is yours to choose.** The default is [Jev](https://typesafe.ai), TypeSafe's hosted decision model. Any server that speaks the same protocol works by setting `RULEKIT_JUDGE_URL`.
 
@@ -444,7 +446,7 @@ The sweep is not a substitute for the pre-write hooks; catching a write before i
 | `PostToolUse` on every tool | `post-write-sweep.rb` | The same write rules against what changed on disk |
 | `UserPromptSubmit` | `stop-rules-check.rb --record` | Records the working tree, so your own edits between turns are not judged |
 | `Stop` | `stop-rules-check.rb` | `judge:` rules against what the turn added, and an [Abide rubric](#abide-rubrics-optional) when switched on |
-| `SessionStart` | cleanup, then both recorders | Clears the session's "once" sentinels and records the starting state |
+| `SessionStart` | cleanup, then both recorders | Clears the session's "once" sentinels, keeping the recorders' snapshots, and records the starting state |
 
 ## Also in this marketplace: exhalekit
 
@@ -486,6 +488,7 @@ claude-rulekit/
     │   │   ├── rules_runner.rb               # shared matching, sentinels, output
     │   │   ├── working_tree.rb               # what changed on disk, for the sweep and the Stop hook
     │   │   ├── judge_client.rb               # optional `judge:` rules; the model backend lives here
+    │   │   ├── judge_log.rb                  # judge.log: each Stop pass and judge request
     │   │   └── abide_rubric.rb               # optional: an Abide rubric read as `judge:` rules on Stop
     │   ├── commands/
     │   │   ├── rules-init.md                 # /rules-init <preset>

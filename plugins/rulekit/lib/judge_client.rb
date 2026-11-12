@@ -38,8 +38,8 @@ require_relative 'judge_log'
 #
 # The judge may be a paid network call, so `judge:` rules are not asked about
 # on every edit. stop-rules-check.rb evaluates them when the agent finishes a
-# turn, and each changed file costs one request carrying every `judge:` rule
-# that matched it, as one question apiece (`noul` is the protocol's yes/no).
+# turn, and each changed file costs one request (one per part, for a long
+# addition) carrying every `judge:` rule that matched it, as one question apiece (`noul` is the protocol's yes/no).
 #
 # The judge is strictly optional and fails open. Unconfigured — no API key and
 # no URL — nothing is sent at all. Every failure — unreachable, timeout,
