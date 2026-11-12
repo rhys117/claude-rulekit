@@ -261,6 +261,7 @@ RSpec.describe 'judge rules' do
 
       expect(File).not_to exist(File.join(project.session_dir('s2'), 'some_advisory'))
       expect(project.stop('s2')).to fire('semantic_backfill')
+      expect(File.read(File.join(project.session_dir('s2'), 'judge.log')).lines.size).to eq(4), 'the log survives too'
     end
 
     it 'returns a warn rule as feedback, skips a pattern miss, and ignores edits made between turns' do

@@ -18,7 +18,7 @@ ROOT="$CLAUDE_PROJECT_DIR/tmp/.claude-advisory"
 
 if [ -n "$SESSION_ID" ] && [ -d "$ROOT/$SESSION_ID" ]; then
   find "$ROOT/$SESSION_ID" -mindepth 1 -maxdepth 1 -type f \
-    ! -name turn-base ! -name turn-closed ! -name stop-continuations ! -name judge-down -delete
+    ! -name turn-base ! -name turn-closed ! -name stop-continuations ! -name judge-down ! -name judge.log -delete
 fi
 
 # GC: prune session dirs older than 7 days
