@@ -236,12 +236,13 @@ RSpec.describe 'judge rules' do
 
       log = File.readlines(File.join(project.session_dir('s2'), 'judge.log')).map { |line| JSON.parse(line) }
 
-      expect(log.map { |entry| entry['event'] }).to eq(%w[record record stop request stop])
+      expect(log.map { |entry| entry['event'] }).to eq(%w[record record stop request done stop done])
       expect(log[1]['skipped']).to eq('turn still open')
       expect(log[2]).to include('moved' => 1, 'judged' => 1, 'skipped' => nil)
       expect(log[3]).to include('file' => 'db/migrate/002_x.rb', 'status' => 'ok')
       expect(log[3]['rules']).to include('semantic_backfill')
-      expect(log[4]['skipped']).to eq('judge not configured')
+      expect(log[4]).to include('findings' => true, 'turn' => 'open')
+      expect(log[5]['skipped']).to eq('judge not configured')
     end
 
     it 'keeps judging the turn when a record pass lands mid-turn, as a task notification does' do
@@ -264,7 +265,18 @@ RSpec.describe 'judge rules' do
       expect(File).not_to exist(File.join(project.session_dir('s2'), 'some_advisory'))
       expect(File).not_to exist(File.join(project.session_dir('s2'), 'nested')), 'a sentinel in a subdirectory too'
       expect(project.stop('s2')).to fire('semantic_backfill')
-      expect(File.read(File.join(project.session_dir('s2'), 'judge.log')).lines.size).to eq(4), 'the log survives too'
+      expect(File.read(File.join(project.session_dir('s2'), 'judge.log')).lines.size).to eq(5), 'the log survives too'
+    end
+
+    it 'lets a turn end on a warning, so the next prompt starts a new turn' do
+      project.record('s2')
+      add 'app/models/x.rb', 'def backfill; end'
+      expect(project.stop('s2').stdout).to include('"additionalContext"')
+
+      add 'app/models/user_edit.rb', 'def backfill; end'
+      project.record('s2')
+
+      expect { project.stop('s2') }.not_to(change { judge.requests.size })
     end
 
     it 'returns a warn rule as feedback, skips a pattern miss, and ignores edits made between turns' do

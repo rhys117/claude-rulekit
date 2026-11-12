@@ -151,7 +151,6 @@ Array.new([JUDGE_THREADS, queue.size].min) do
   end
 end.each(&:join)
 
-keeps_turn_open = false
 if runner.pending?
   continuations = File.exist?(counter) ? File.read(counter).to_i : 0
 
@@ -160,13 +159,14 @@ if runner.pending?
   else
     FileUtils.mkdir_p(session_dir)
     File.write(counter, (continuations + 1).to_s)
-    keeps_turn_open = true
   end
 end
 
-unless record_only || keeps_turn_open
-  FileUtils.mkdir_p(session_dir)
-  FileUtils.touch(turn_closed)
+# Only a block is sure to keep the turn going; after a warning or a quiet pass
+# the next prompt starts a new turn.
+unless record_only
+  JudgeLog.append(session_dir, event: 'done', findings: runner.pending?, turn: runner.blocking? ? 'open' : 'closed')
+  FileUtils.touch(turn_closed) unless runner.blocking?
 end
 
 runner.emit!
