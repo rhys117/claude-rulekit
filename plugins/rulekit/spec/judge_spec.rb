@@ -257,9 +257,12 @@ RSpec.describe 'judge rules' do
       project.record('s2')
       add 'db/migrate/002_x.rb', 'User.find_each { backfill slug }'
       FileUtils.touch(File.join(project.session_dir('s2'), 'some_advisory'))
+      FileUtils.mkdir_p(File.join(project.session_dir('s2'), 'nested'))
+      FileUtils.touch(File.join(project.session_dir('s2'), 'nested', 'advisory'))
       project.session_start('s2', source: 'compact')
 
       expect(File).not_to exist(File.join(project.session_dir('s2'), 'some_advisory'))
+      expect(File).not_to exist(File.join(project.session_dir('s2'), 'nested')), 'a sentinel in a subdirectory too'
       expect(project.stop('s2')).to fire('semantic_backfill')
       expect(File.read(File.join(project.session_dir('s2'), 'judge.log')).lines.size).to eq(4), 'the log survives too'
     end

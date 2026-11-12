@@ -154,6 +154,19 @@ RSpec.describe 'rubric files' do
       expect(project.sweep(project.bash('true'))).to fire('no_default_scope')
     end
 
+    it 'keep sweeping across a compaction, without replaying what was already swept' do
+      project.sweep({ session_id: 's' }, '--bootstrap')
+      project.write('app/models/y.rb', "default_scope { where(x: 1) }\n")
+      expect(project.sweep(project.bash('true'))).to fire('no_default_scope')
+
+      project.session_start('s', source: 'compact')
+      project.sweep({ session_id: 's' }, '--bootstrap')
+      expect(project.sweep(project.bash('true'))).to be_silent, 'nothing new to sweep'
+
+      project.write('app/models/z.rb', "default_scope { where(x: 2) }\n")
+      expect(project.sweep(project.bash('true'))).to fire('no_default_scope')
+    end
+
     it 'judge write_rubric judge rules on Stop' do
       project.record('s')
       project.write('db/migrate/001_x.rb', "User.find_each { backfill }\n")
