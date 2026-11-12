@@ -60,7 +60,7 @@ class JudgeClient
   DEFAULT_TIMEOUT = 10.0
   OPEN_TIMEOUT = 3.0
   DOWN_TTL = 60
-  # Largest per-file state sent. Beyond this the added lines are cut.
+  # Largest state sent in one request. Longer additions go in several.
   MAX_CHARS = 8000
 
   def self.from_env(session_dir:)
@@ -107,10 +107,21 @@ class JudgeClient
     questions = configs.transform_values { |config| self.class.question(config) }.compact
     return {} if questions.empty?
 
-    answers = ask(questions, "File: #{relative_path}\n\n#{new_content}") || {}
-    questions.each_key.with_object({}) do |name, found|
-      probability = self.class.violation(configs[name], answers[name])
-      found[name] = probability unless probability.nil?
+    self.class.parts(new_content).each_with_object({}) do |part, found|
+      answers = ask(questions, "File: #{relative_path}\n\n#{part}") || {}
+      questions.each_key do |name|
+        probability = self.class.violation(configs[name], answers[name])
+        found[name] = [found[name], probability].compact.max unless probability.nil?
+      end
+    end
+  end
+
+  # `content` cut at line boundaries into pieces that fit one request, so a
+  # long addition is asked about in full. A rule's verdict is its worst part.
+  def self.parts(content, size = MAX_CHARS - 512)
+    content.each_line.each_with_object([+'']) do |line, parts|
+      parts << +'' if !parts.last.empty? && parts.last.length + line.length > size
+      parts.last << line
     end
   end
 

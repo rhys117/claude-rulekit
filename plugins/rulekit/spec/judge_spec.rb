@@ -218,6 +218,15 @@ RSpec.describe 'judge rules' do
       expect(judge.requests.size).to eq(31)
     end
 
+    it 'judges a long addition in parts, so lines past the first part are still asked about' do
+      project.record('s2')
+      add 'db/migrate/030_x.rb', "#{"add_index :users, :email\n" * 400}User.find_each { backfill slug }"
+
+      expect(project.stop('s2')).to fire('semantic_backfill')
+      expect(judge.requests.size).to eq(2)
+      expect(judge.requests.map(&:state)).to all(start_with('File: db/migrate/030_x.rb'))
+    end
+
     it 'keeps judging the turn when a record pass lands mid-turn, as a task notification does' do
       project.record('s2')
       add 'db/migrate/002_x.rb', 'User.find_each { backfill slug }'
