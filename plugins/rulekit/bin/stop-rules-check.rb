@@ -21,6 +21,11 @@
 # records the new state. A file that has not moved since the last Stop is not
 # asked about again, so a finding the agent chose to leave does not come back.
 #
+# A record pass only starts a new turn once a Stop has let the last one end.
+# UserPromptSubmit also fires for task notifications and SessionStart for a
+# compaction, both mid-turn; recording then would pass the agent's own edits
+# off as the user's.
+#
 # What the agent sees
 # -------------------
 # Either way the turn stays open so the agent can act on the finding:
@@ -80,6 +85,10 @@ was_initialized = snapshots.initialized?
 # The commit the turn started from, so work the agent committed before
 # stopping is judged too. Re-read on every pass, so a turn's Stops agree.
 turn_base = File.join(session_dir, 'turn-base')
+turn_closed = File.join(session_dir, 'turn-closed')
+exit 0 if record_only && File.exist?(turn_base) && !File.exist?(turn_closed)
+
+FileUtils.rm_f(turn_closed) if record_only
 if record_only || !File.exist?(turn_base)
   head = WorkingTree.git(project_dir, 'rev-parse', 'HEAD')&.strip
   FileUtils.mkdir_p(session_dir)
@@ -115,6 +124,7 @@ WorkingTree.each_addition(project_dir, snapshots, changes) do |change, added|
   )
 end
 
+keeps_turn_open = false
 if runner.pending?
   continuations = File.exist?(counter) ? File.read(counter).to_i : 0
 
@@ -123,7 +133,13 @@ if runner.pending?
   else
     FileUtils.mkdir_p(session_dir)
     File.write(counter, (continuations + 1).to_s)
+    keeps_turn_open = true
   end
+end
+
+unless record_only || keeps_turn_open
+  FileUtils.mkdir_p(session_dir)
+  FileUtils.touch(turn_closed)
 end
 
 runner.emit!

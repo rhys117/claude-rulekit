@@ -139,6 +139,7 @@ RSpec.describe 'judge rules' do
       project.record('s2')
       add 'db/migrate/002_x.rb', 'User.find_each { backfill slug }'
       expect(project.stop('s2')).to fire('semantic_backfill')
+      project.stop('s2')
 
       FileUtils.rm(project.path('db/migrate/002_x.rb'))
       project.record('s2')
@@ -153,6 +154,7 @@ RSpec.describe 'judge rules' do
       project.record('s2')
       add 'db/migrate/002_x.rb', 'User.find_each { backfill slug }'
       expect(project.stop('s2')).to fire('semantic_backfill')
+      project.stop('s2')
 
       project.write('db/migrate/002_x.rb', "add_index :users, :email\n")
       project.record('s2')
@@ -199,8 +201,18 @@ RSpec.describe 'judge rules' do
       expect(judge.requests).to be_empty
     end
 
+    it 'keeps judging the turn when a record pass lands mid-turn, as a task notification does' do
+      project.record('s2')
+      add 'db/migrate/002_x.rb', 'User.find_each { backfill slug }'
+      project.record('s2')
+
+      expect(project.stop('s2')).to fire('semantic_backfill')
+      expect(judge.requests.map(&:state).join).to include('002_x')
+    end
+
     it 'returns a warn rule as feedback, skips a pattern miss, and ignores edits made between turns' do
       project.record('s2')
+      project.stop('s2')
       add 'db/migrate/004_user_edit.rb', 'backfill by hand'
       project.record('s2')
       add 'app/models/x.rb', 'def backfill; end'
