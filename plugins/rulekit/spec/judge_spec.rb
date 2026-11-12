@@ -227,6 +227,23 @@ RSpec.describe 'judge rules' do
       expect(judge.requests.map(&:state)).to all(start_with('File: db/migrate/030_x.rb'))
     end
 
+    it 'logs each pass and each request, with the reason a pass sent nothing' do
+      project.record('s2')
+      project.record('s2')
+      add 'db/migrate/002_x.rb', 'User.find_each { backfill slug }'
+      project.stop('s2')
+      project.stop('s2', env: { 'RULEKIT_JUDGE_URL' => nil, 'RULEKIT_JUDGE_API_KEY' => nil })
+
+      log = File.readlines(File.join(project.session_dir('s2'), 'judge.log')).map { |line| JSON.parse(line) }
+
+      expect(log.map { |entry| entry['event'] }).to eq(%w[record record stop request stop])
+      expect(log[1]['skipped']).to eq('turn still open')
+      expect(log[2]).to include('moved' => 1, 'judged' => 1, 'skipped' => nil)
+      expect(log[3]).to include('file' => 'db/migrate/002_x.rb', 'status' => 'ok')
+      expect(log[3]['rules']).to include('semantic_backfill')
+      expect(log[4]['skipped']).to eq('judge not configured')
+    end
+
     it 'keeps judging the turn when a record pass lands mid-turn, as a task notification does' do
       project.record('s2')
       add 'db/migrate/002_x.rb', 'User.find_each { backfill slug }'

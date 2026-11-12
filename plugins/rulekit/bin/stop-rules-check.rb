@@ -48,6 +48,7 @@
 require 'json'
 require 'fileutils'
 require_relative '../lib/abide_rubric'
+require_relative '../lib/judge_log'
 require_relative '../lib/rules_runner'
 require_relative '../lib/working_tree'
 
@@ -93,7 +94,10 @@ was_initialized = snapshots.initialized?
 # stopping is judged too. Re-read on every pass, so a turn's Stops agree.
 turn_base = File.join(session_dir, 'turn-base')
 turn_closed = File.join(session_dir, 'turn-closed')
-exit 0 if record_only && File.exist?(turn_base) && !File.exist?(turn_closed)
+if record_only && File.exist?(turn_base) && !File.exist?(turn_closed)
+  JudgeLog.append(session_dir, event: 'record', skipped: 'turn still open')
+  exit 0
+end
 
 FileUtils.rm_f(turn_closed) if record_only
 if record_only || !File.exist?(turn_base)
@@ -110,11 +114,19 @@ exit 0 if changes.nil?
 rule_globs = stop_rules.each_value.flat_map { |rule| Array(rule['files']) }.uniq
 judged = changes.select { |change| runner.matches_globs?(rule_globs, change.relative, change.absolute) }
 
-silent = record_only ||
-         !was_initialized ||
-         judged.length > MAX_JUDGED_FILES ||
-         !runner.judge_configured?
+skipped = if record_only then 'record pass'
+          elsif !was_initialized then 'first pass of the session'
+          elsif judged.length > MAX_JUDGED_FILES then "more than #{MAX_JUDGED_FILES} judged files"
+          elsif !runner.judge_configured? then 'judge not configured'
+          end
+silent = !skipped.nil?
 snapshots.initialize! unless was_initialized
+
+if record_only
+  JudgeLog.append(session_dir, event: 'record', since: since)
+else
+  JudgeLog.append(session_dir, event: 'stop', moved: changes.length, judged: judged.length, skipped: skipped)
+end
 
 # Continuations this turn. Only a fresh prompt starts the count again.
 counter = File.join(session_dir, 'stop-continuations')

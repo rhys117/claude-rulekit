@@ -2,6 +2,7 @@ require 'fileutils'
 require 'json'
 require 'net/http'
 require 'uri'
+require_relative 'judge_log'
 
 # Optional semantic matching by a hosted or local decision model: "the judge".
 #
@@ -69,7 +70,7 @@ class JudgeClient
       model: env('RULEKIT_JUDGE_MODEL') || DEFAULT_MODEL,
       read_timeout: timeout(env('RULEKIT_JUDGE_TIMEOUT')),
       api_key: env('RULEKIT_JUDGE_API_KEY', 'TYPESAFE_AI_API_KEY'),
-      down_marker: File.join(session_dir, 'judge-down'),
+      session_dir: session_dir,
     )
   end
 
@@ -83,13 +84,14 @@ class JudgeClient
     seconds&.positive? ? seconds : DEFAULT_TIMEOUT
   end
 
-  def initialize(url:, model:, read_timeout:, api_key:, down_marker:)
+  def initialize(url:, model:, read_timeout:, api_key:, session_dir:)
     @configured = !(url.nil? && api_key.nil?)
     @uri = URI("#{(url || DEFAULT_URL).chomp('/')}/systemone")
     @model = model
     @read_timeout = read_timeout
     @api_key = api_key
-    @down_marker = down_marker
+    @session_dir = session_dir
+    @down_marker = File.join(session_dir, 'judge-down')
   end
 
   # A key is enough for the default backend; a URL alone is enough for a local
@@ -108,7 +110,7 @@ class JudgeClient
     return {} if questions.empty?
 
     self.class.parts(new_content).each_with_object({}) do |part, found|
-      answers = ask(questions, "File: #{relative_path}\n\n#{part}") || {}
+      answers = logged_ask(questions, relative_path, part) || {}
       questions.each_key do |name|
         probability = self.class.violation(configs[name], answers[name])
         found[name] = [found[name], probability].compact.max unless probability.nil?
@@ -174,6 +176,22 @@ class JudgeClient
   end
 
   private
+
+  # `ask`, with a line in the session's judge.log saying how it went.
+  def logged_ask(questions, relative_path, part)
+    was_down = down?
+    started = Process.clock_gettime(Process::CLOCK_MONOTONIC)
+    answers = ask(questions, "File: #{relative_path}\n\n#{part}")
+    elapsed = Process.clock_gettime(Process::CLOCK_MONOTONIC) - started
+    status = if answers then 'ok'
+             elsif was_down then 'judge down'
+             else 'failed'
+             end
+
+    JudgeLog.append(@session_dir, event: 'request', file: relative_path, chars: part.length,
+                                  rules: questions.keys, status: status, ms: (elapsed * 1000).round)
+    answers
+  end
 
   # `questions` maps a key to its question. Returns { key => answer } as the
   # judge gave them, or nil on any failure.
