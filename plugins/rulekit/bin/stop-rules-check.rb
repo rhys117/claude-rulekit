@@ -43,7 +43,7 @@
 #
 # It stays silent — recording only — when the judge is not configured, when it
 # cannot be reached, on the first pass of a session, and when more than
-# WorkingTree::MAX_FILES files moved at once.
+# MAX_JUDGED_FILES judged files moved at once.
 
 require 'json'
 require 'fileutils'
@@ -54,6 +54,13 @@ require_relative '../lib/working_tree'
 # How many times one turn may be kept open: the first finding, plus one
 # re-check of whatever the agent changed in response.
 MAX_CONTINUATIONS = 2
+
+# Above this many judged files at once the Stop records and stays silent: that
+# is history arriving, not a turn's work. Only files a `judge:` rule covers
+# count, and JUDGE_THREADS requests run at a time so a large turn still fits in
+# the hook's timeout.
+MAX_JUDGED_FILES = 100
+JUDGE_THREADS = 6
 
 input = begin
   JSON.parse($stdin.read)
@@ -100,9 +107,12 @@ since = nil if since.empty?
 changes = WorkingTree.moved_files(project_dir, snapshots, since: since)
 exit 0 if changes.nil?
 
+rule_globs = stop_rules.each_value.flat_map { |rule| Array(rule['files']) }.uniq
+judged = changes.select { |change| runner.matches_globs?(rule_globs, change.relative, change.absolute) }
+
 silent = record_only ||
          !was_initialized ||
-         changes.length > WorkingTree::MAX_FILES ||
+         judged.length > MAX_JUDGED_FILES ||
          !runner.judge_configured?
 snapshots.initialize! unless was_initialized
 
@@ -110,19 +120,24 @@ snapshots.initialize! unless was_initialized
 counter = File.join(session_dir, 'stop-continuations')
 FileUtils.rm_f(counter) if record_only
 
-rule_globs = stop_rules.each_value.flat_map { |rule| Array(rule['files']) }.uniq
-
+queue = Queue.new
 WorkingTree.each_addition(project_dir, snapshots, changes) do |change, added|
-  next if silent
-  next unless runner.matches_globs?(rule_globs, change.relative, change.absolute)
-
-  runner.apply_stop_rules(
-    stop_rules,
-    file_path: change.absolute,
-    relative_path: change.relative,
-    new_content: added,
-  )
+  queue << [change, added] if !silent && judged.include?(change)
 end
+queue.close
+
+Array.new([JUDGE_THREADS, queue.size].min) do
+  Thread.new do
+    while (change, added = queue.pop)
+      runner.apply_stop_rules(
+        stop_rules,
+        file_path: change.absolute,
+        relative_path: change.relative,
+        new_content: added,
+      )
+    end
+  end
+end.each(&:join)
 
 keeps_turn_open = false
 if runner.pending?

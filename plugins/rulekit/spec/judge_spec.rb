@@ -201,6 +201,23 @@ RSpec.describe 'judge rules' do
       expect(judge.requests).to be_empty
     end
 
+    it 'counts only the files a judge rule covers against the cap' do
+      project.record('s2')
+      30.times { |n| add "docs/page_#{n}.md", 'notes' }
+      add 'db/migrate/002_x.rb', 'User.find_each { backfill slug }'
+
+      expect(project.stop('s2')).to fire('semantic_backfill')
+    end
+
+    it 'judges every file a large turn wrote, not one that goes silent' do
+      project.record('s2')
+      30.times { |n| add "app/models/m#{n}.rb", 'def x; end' }
+      add 'db/migrate/002_x.rb', 'User.find_each { backfill slug }'
+
+      expect(project.stop('s2')).to fire('semantic_backfill')
+      expect(judge.requests.size).to eq(31)
+    end
+
     it 'keeps judging the turn when a record pass lands mid-turn, as a task notification does' do
       project.record('s2')
       add 'db/migrate/002_x.rb', 'User.find_each { backfill slug }'
