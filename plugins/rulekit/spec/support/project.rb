@@ -97,6 +97,12 @@ class Project
     run('stop-rules-check.rb', { session_id: session, hook_event_name: 'Stop' }, **options)
   end
 
+  # The SessionStart hooks in order: sentinel cleanup, then the Stop recorder.
+  def session_start(session, source: 'startup')
+    run('clear-advisory-sentinels.sh', { session_id: session, source: source })
+    record(session)
+  end
+
   def rubric(command, **options)
     run('rules-rubric.rb', nil, command, **options)
   end

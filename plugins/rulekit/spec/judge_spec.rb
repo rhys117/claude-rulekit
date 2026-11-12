@@ -210,6 +210,16 @@ RSpec.describe 'judge rules' do
       expect(judge.requests.map(&:state).join).to include('002_x')
     end
 
+    it 'keeps judging the turn across a compaction, which still clears the once-per-session sentinels' do
+      project.record('s2')
+      add 'db/migrate/002_x.rb', 'User.find_each { backfill slug }'
+      FileUtils.touch(File.join(project.session_dir('s2'), 'some_advisory'))
+      project.session_start('s2', source: 'compact')
+
+      expect(File).not_to exist(File.join(project.session_dir('s2'), 'some_advisory'))
+      expect(project.stop('s2')).to fire('semantic_backfill')
+    end
+
     it 'returns a warn rule as feedback, skips a pattern miss, and ignores edits made between turns' do
       project.record('s2')
       project.stop('s2')
