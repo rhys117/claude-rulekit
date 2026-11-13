@@ -2,6 +2,7 @@ require 'fileutils'
 require 'json'
 require 'net/http'
 require 'uri'
+require_relative 'judge_log'
 
 # Optional semantic matching by a hosted or local decision model: "the judge".
 #
@@ -37,8 +38,8 @@ require 'uri'
 #
 # The judge may be a paid network call, so `judge:` rules are not asked about
 # on every edit. stop-rules-check.rb evaluates them when the agent finishes a
-# turn, and each changed file costs one request carrying every `judge:` rule
-# that matched it, as one question apiece (`noul` is the protocol's yes/no).
+# turn, and each changed file costs one request (one per part, for a long
+# addition) carrying every `judge:` rule that matched it, as one question apiece (`noul` is the protocol's yes/no).
 #
 # The judge is strictly optional and fails open. Unconfigured — no API key and
 # no URL — nothing is sent at all. Every failure — unreachable, timeout,
@@ -60,7 +61,7 @@ class JudgeClient
   DEFAULT_TIMEOUT = 10.0
   OPEN_TIMEOUT = 3.0
   DOWN_TTL = 60
-  # Largest per-file state sent. Beyond this the added lines are cut.
+  # Largest state sent in one request. Longer additions go in several.
   MAX_CHARS = 8000
 
   def self.from_env(session_dir:)
@@ -69,7 +70,7 @@ class JudgeClient
       model: env('RULEKIT_JUDGE_MODEL') || DEFAULT_MODEL,
       read_timeout: timeout(env('RULEKIT_JUDGE_TIMEOUT')),
       api_key: env('RULEKIT_JUDGE_API_KEY', 'TYPESAFE_AI_API_KEY'),
-      down_marker: File.join(session_dir, 'judge-down'),
+      session_dir: session_dir,
     )
   end
 
@@ -83,13 +84,14 @@ class JudgeClient
     seconds&.positive? ? seconds : DEFAULT_TIMEOUT
   end
 
-  def initialize(url:, model:, read_timeout:, api_key:, down_marker:)
+  def initialize(url:, model:, read_timeout:, api_key:, session_dir:)
     @configured = !(url.nil? && api_key.nil?)
     @uri = URI("#{(url || DEFAULT_URL).chomp('/')}/systemone")
     @model = model
     @read_timeout = read_timeout
     @api_key = api_key
-    @down_marker = down_marker
+    @session_dir = session_dir
+    @down_marker = File.join(session_dir, 'judge-down')
   end
 
   # A key is enough for the default backend; a URL alone is enough for a local
@@ -107,10 +109,21 @@ class JudgeClient
     questions = configs.transform_values { |config| self.class.question(config) }.compact
     return {} if questions.empty?
 
-    answers = ask(questions, "File: #{relative_path}\n\n#{new_content}") || {}
-    questions.each_key.with_object({}) do |name, found|
-      probability = self.class.violation(configs[name], answers[name])
-      found[name] = probability unless probability.nil?
+    self.class.parts(new_content).each_with_object({}) do |part, found|
+      answers = logged_ask(questions, relative_path, part) || {}
+      questions.each_key do |name|
+        probability = self.class.violation(configs[name], answers[name])
+        found[name] = [found[name], probability].compact.max unless probability.nil?
+      end
+    end
+  end
+
+  # `content` cut at line boundaries into pieces that fit one request, so a
+  # long addition is asked about in full. A rule's verdict is its worst part.
+  def self.parts(content, size = MAX_CHARS - 512)
+    content.each_line.each_with_object([+'']) do |line, parts|
+      parts << +'' if !parts.last.empty? && parts.last.length + line.length > size
+      parts.last << line
     end
   end
 
@@ -163,6 +176,22 @@ class JudgeClient
   end
 
   private
+
+  # `ask`, with a line in the session's judge.log saying how it went.
+  def logged_ask(questions, relative_path, part)
+    was_down = down?
+    started = Process.clock_gettime(Process::CLOCK_MONOTONIC)
+    answers = ask(questions, "File: #{relative_path}\n\n#{part}")
+    elapsed = Process.clock_gettime(Process::CLOCK_MONOTONIC) - started
+    status = if answers then 'ok'
+             elsif was_down then 'judge down'
+             else 'failed'
+             end
+
+    JudgeLog.append(@session_dir, event: 'request', file: relative_path, chars: part.length,
+                                  rules: questions.keys, status: status, ms: (elapsed * 1000).round)
+    answers
+  end
 
   # `questions` maps a key to its question. Returns { key => answer } as the
   # judge gave them, or nil on any failure.

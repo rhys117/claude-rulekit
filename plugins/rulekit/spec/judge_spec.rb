@@ -139,6 +139,7 @@ RSpec.describe 'judge rules' do
       project.record('s2')
       add 'db/migrate/002_x.rb', 'User.find_each { backfill slug }'
       expect(project.stop('s2')).to fire('semantic_backfill')
+      project.stop('s2')
 
       FileUtils.rm(project.path('db/migrate/002_x.rb'))
       project.record('s2')
@@ -153,6 +154,7 @@ RSpec.describe 'judge rules' do
       project.record('s2')
       add 'db/migrate/002_x.rb', 'User.find_each { backfill slug }'
       expect(project.stop('s2')).to fire('semantic_backfill')
+      project.stop('s2')
 
       project.write('db/migrate/002_x.rb', "add_index :users, :email\n")
       project.record('s2')
@@ -199,8 +201,87 @@ RSpec.describe 'judge rules' do
       expect(judge.requests).to be_empty
     end
 
+    it 'counts only the files a judge rule covers against the cap' do
+      project.record('s2')
+      30.times { |n| add "docs/page_#{n}.md", 'notes' }
+      add 'db/migrate/002_x.rb', 'User.find_each { backfill slug }'
+
+      expect(project.stop('s2')).to fire('semantic_backfill')
+    end
+
+    it 'judges every file a large turn wrote, not one that goes silent' do
+      project.record('s2')
+      30.times { |n| add "app/models/m#{n}.rb", 'def x; end' }
+      add 'db/migrate/002_x.rb', 'User.find_each { backfill slug }'
+
+      expect(project.stop('s2')).to fire('semantic_backfill')
+      expect(judge.requests.size).to eq(31)
+    end
+
+    it 'judges a long addition in parts, so lines past the first part are still asked about' do
+      project.record('s2')
+      add 'db/migrate/030_x.rb', "#{"add_index :users, :email\n" * 400}User.find_each { backfill slug }"
+
+      expect(project.stop('s2')).to fire('semantic_backfill')
+      expect(judge.requests.size).to eq(2)
+      expect(judge.requests.map(&:state)).to all(start_with('File: db/migrate/030_x.rb'))
+    end
+
+    it 'logs each pass and each request, with the reason a pass sent nothing' do
+      project.record('s2')
+      project.record('s2')
+      add 'db/migrate/002_x.rb', 'User.find_each { backfill slug }'
+      project.stop('s2')
+      project.stop('s2', env: { 'RULEKIT_JUDGE_URL' => nil, 'RULEKIT_JUDGE_API_KEY' => nil })
+
+      log = File.readlines(File.join(project.session_dir('s2'), 'judge.log')).map { |line| JSON.parse(line) }
+
+      expect(log.map { |entry| entry['event'] }).to eq(%w[record record stop request done stop done])
+      expect(log[1]['skipped']).to eq('turn still open')
+      expect(log[2]).to include('moved' => 1, 'judged' => 1, 'skipped' => nil)
+      expect(log[3]).to include('file' => 'db/migrate/002_x.rb', 'status' => 'ok')
+      expect(log[3]['rules']).to include('semantic_backfill')
+      expect(log[4]).to include('findings' => true, 'turn' => 'open')
+      expect(log[5]['skipped']).to eq('judge not configured')
+    end
+
+    it 'keeps judging the turn when a record pass lands mid-turn, as a task notification does' do
+      project.record('s2')
+      add 'db/migrate/002_x.rb', 'User.find_each { backfill slug }'
+      project.record('s2')
+
+      expect(project.stop('s2')).to fire('semantic_backfill')
+      expect(judge.requests.map(&:state).join).to include('002_x')
+    end
+
+    it 'keeps judging the turn across a compaction, which still clears the once-per-session sentinels' do
+      project.record('s2')
+      add 'db/migrate/002_x.rb', 'User.find_each { backfill slug }'
+      FileUtils.touch(File.join(project.session_dir('s2'), 'some_advisory'))
+      FileUtils.mkdir_p(File.join(project.session_dir('s2'), 'nested'))
+      FileUtils.touch(File.join(project.session_dir('s2'), 'nested', 'advisory'))
+      project.session_start('s2', source: 'compact')
+
+      expect(File).not_to exist(File.join(project.session_dir('s2'), 'some_advisory'))
+      expect(File).not_to exist(File.join(project.session_dir('s2'), 'nested')), 'a sentinel in a subdirectory too'
+      expect(project.stop('s2')).to fire('semantic_backfill')
+      expect(File.read(File.join(project.session_dir('s2'), 'judge.log')).lines.size).to eq(5), 'the log survives too'
+    end
+
+    it 'lets a turn end on a warning, so the next prompt starts a new turn' do
+      project.record('s2')
+      add 'app/models/x.rb', 'def backfill; end'
+      expect(project.stop('s2').stdout).to include('"additionalContext"')
+
+      add 'app/models/user_edit.rb', 'def backfill; end'
+      project.record('s2')
+
+      expect { project.stop('s2') }.not_to(change { judge.requests.size })
+    end
+
     it 'returns a warn rule as feedback, skips a pattern miss, and ignores edits made between turns' do
       project.record('s2')
+      project.stop('s2')
       add 'db/migrate/004_user_edit.rb', 'backfill by hand'
       project.record('s2')
       add 'app/models/x.rb', 'def backfill; end'

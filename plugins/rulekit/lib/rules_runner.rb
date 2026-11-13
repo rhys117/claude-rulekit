@@ -187,6 +187,11 @@ class RulesRunner
     @blocks.any? || @warns.any?
   end
 
+  # True when the output will hold the turn open with decision: "block".
+  def blocking?
+    @blocks.any?
+  end
+
   # Turns everything pending into a note for the user. The Stop hook calls
   # this once it has kept the turn open as often as one turn allows.
   def demote_to_notice!

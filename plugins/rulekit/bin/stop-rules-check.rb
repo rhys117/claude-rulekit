@@ -21,6 +21,11 @@
 # records the new state. A file that has not moved since the last Stop is not
 # asked about again, so a finding the agent chose to leave does not come back.
 #
+# A record pass only starts a new turn once a Stop has let the last one end.
+# UserPromptSubmit also fires for task notifications and SessionStart for a
+# compaction, both mid-turn; recording then would pass the agent's own edits
+# off as the user's.
+#
 # What the agent sees
 # -------------------
 # Either way the turn stays open so the agent can act on the finding:
@@ -38,17 +43,25 @@
 #
 # It stays silent — recording only — when the judge is not configured, when it
 # cannot be reached, on the first pass of a session, and when more than
-# WorkingTree::MAX_FILES files moved at once.
+# MAX_JUDGED_FILES judged files moved at once.
 
 require 'json'
 require 'fileutils'
 require_relative '../lib/abide_rubric'
+require_relative '../lib/judge_log'
 require_relative '../lib/rules_runner'
 require_relative '../lib/working_tree'
 
 # How many times one turn may be kept open: the first finding, plus one
 # re-check of whatever the agent changed in response.
 MAX_CONTINUATIONS = 2
+
+# Above this many judged files at once the Stop records and stays silent: that
+# is history arriving, not a turn's work. Only files a `judge:` rule covers
+# count, and JUDGE_THREADS requests run at a time so a large turn still fits in
+# the hook's timeout.
+MAX_JUDGED_FILES = 100
+JUDGE_THREADS = 6
 
 input = begin
   JSON.parse($stdin.read)
@@ -80,6 +93,13 @@ was_initialized = snapshots.initialized?
 # The commit the turn started from, so work the agent committed before
 # stopping is judged too. Re-read on every pass, so a turn's Stops agree.
 turn_base = File.join(session_dir, 'turn-base')
+turn_closed = File.join(session_dir, 'turn-closed')
+if record_only && File.exist?(turn_base) && !File.exist?(turn_closed)
+  JudgeLog.append(session_dir, event: 'record', skipped: 'turn still open')
+  exit 0
+end
+
+FileUtils.rm_f(turn_closed) if record_only
 if record_only || !File.exist?(turn_base)
   head = WorkingTree.git(project_dir, 'rev-parse', 'HEAD')&.strip
   FileUtils.mkdir_p(session_dir)
@@ -91,29 +111,45 @@ since = nil if since.empty?
 changes = WorkingTree.moved_files(project_dir, snapshots, since: since)
 exit 0 if changes.nil?
 
-silent = record_only ||
-         !was_initialized ||
-         changes.length > WorkingTree::MAX_FILES ||
-         !runner.judge_configured?
+rule_globs = stop_rules.each_value.flat_map { |rule| Array(rule['files']) }.uniq
+judged = changes.select { |change| runner.matches_globs?(rule_globs, change.relative, change.absolute) }
+
+skipped = if record_only then 'record pass'
+          elsif !was_initialized then 'first pass of the session'
+          elsif judged.length > MAX_JUDGED_FILES then "more than #{MAX_JUDGED_FILES} judged files"
+          elsif !runner.judge_configured? then 'judge not configured'
+          end
+silent = !skipped.nil?
 snapshots.initialize! unless was_initialized
+
+if record_only
+  JudgeLog.append(session_dir, event: 'record', since: since)
+else
+  JudgeLog.append(session_dir, event: 'stop', moved: changes.length, judged: judged.length, skipped: skipped)
+end
 
 # Continuations this turn. Only a fresh prompt starts the count again.
 counter = File.join(session_dir, 'stop-continuations')
 FileUtils.rm_f(counter) if record_only
 
-rule_globs = stop_rules.each_value.flat_map { |rule| Array(rule['files']) }.uniq
-
+queue = Queue.new
 WorkingTree.each_addition(project_dir, snapshots, changes) do |change, added|
-  next if silent
-  next unless runner.matches_globs?(rule_globs, change.relative, change.absolute)
-
-  runner.apply_stop_rules(
-    stop_rules,
-    file_path: change.absolute,
-    relative_path: change.relative,
-    new_content: added,
-  )
+  queue << [change, added] if !silent && judged.include?(change)
 end
+queue.close
+
+Array.new([JUDGE_THREADS, queue.size].min) do
+  Thread.new do
+    while (change, added = queue.pop)
+      runner.apply_stop_rules(
+        stop_rules,
+        file_path: change.absolute,
+        relative_path: change.relative,
+        new_content: added,
+      )
+    end
+  end
+end.each(&:join)
 
 if runner.pending?
   continuations = File.exist?(counter) ? File.read(counter).to_i : 0
@@ -124,6 +160,13 @@ if runner.pending?
     FileUtils.mkdir_p(session_dir)
     File.write(counter, (continuations + 1).to_s)
   end
+end
+
+# Only a block is sure to keep the turn going; after a warning or a quiet pass
+# the next prompt starts a new turn.
+unless record_only
+  JudgeLog.append(session_dir, event: 'done', findings: runner.pending?, turn: runner.blocking? ? 'open' : 'closed')
+  FileUtils.touch(turn_closed) unless runner.blocking?
 end
 
 runner.emit!
