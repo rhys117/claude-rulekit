@@ -1,5 +1,6 @@
 require 'digest'
 require 'fileutils'
+require_relative 'checkout_path'
 
 # What changed on disk, for the hooks that guard the working tree rather than a
 # tool call (post-write-sweep.rb and stop-rules-check.rb).
@@ -148,11 +149,13 @@ module WorkingTree
 
     changed = bases.filter_map do |repo_path, base|
       absolute = File.expand_path(File.join(repo_root, repo_path))
+      # Outside this checkout is not the session's work. Callers pass the
+      # worktree when cwd is in one, so a file there is kept.
       next unless absolute.start_with?("#{project_root}/")
       next if absolute.start_with?("#{scratch_root}/") # the hooks' own snapshots
       next unless File.file?(absolute)
 
-      Change.new(base, repo_path, absolute, absolute[(project_root.length + 1)..])
+      Change.new(base, repo_path, absolute, CheckoutPath.relative(absolute, project_dir))
     end
     snapshots.keep_only(changed.map(&:relative))
 

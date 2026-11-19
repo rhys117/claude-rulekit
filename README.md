@@ -120,6 +120,8 @@ no_default_scope:
 | `enabled` | all | Optional. `false` switches the rule off without deleting it. See [switching a rule off](#switching-a-rule-off). |
 | `once_per_session` | warn | When `true`, the rule fires at most once per session. |
 
+Path globs in `files` match the file relative to the git checkout that contains it, including when a session has moved into a worktree, and fall back to `CLAUDE_PROJECT_DIR` when the file is in no checkout.
+
 What each kind supports:
 
 | | Write rules | Tool rules |
@@ -487,6 +489,7 @@ claude-rulekit/
     │   ├── lib/
     │   │   ├── rules_runner.rb               # shared matching, sentinels, output
     │   │   ├── working_tree.rb               # what changed on disk, for the sweep and the Stop hook
+    │   │   ├── checkout_path.rb              # a path relative to the git checkout that contains it
     │   │   ├── judge_client.rb               # optional `judge:` rules; the model backend lives here
     │   │   ├── judge_log.rb                  # judge.log: each Stop pass and judge request
     │   │   └── abide_rubric.rb               # optional: an Abide rubric read as `judge:` rules on Stop

@@ -10,7 +10,7 @@
 #                      "block_once" — deny tool call on first hit per session;
 #                                     allow silently on retry (escape hatch).
 #                      "warn"       — inject context. Honours once_per_session.
-#   files:             Globs (relative to project root, ** supported).
+#   files:             Globs (relative to the git checkout, ** supported).
 #   exclude:           Optional globs. A file matching one is left alone, for
 #                      "everywhere except here".
 #   pattern:           Optional Ruby regex matched against the new content.
@@ -52,6 +52,7 @@
 # same rules on PostToolUse for writes that arrive any other way.
 
 require 'json'
+require_relative '../lib/checkout_path'
 require_relative '../lib/rules_runner'
 
 input = JSON.parse($stdin.read)
@@ -73,11 +74,7 @@ project_dir = ENV['CLAUDE_PROJECT_DIR'].to_s
 rules = RulesRunner.load_rules(project_dir, 'write')
 exit 0 if rules.empty?
 
-relative_path = if !project_dir.empty? && file_path.start_with?("#{project_dir}/")
-                  file_path[(project_dir.length + 1)..]
-                else
-                  file_path
-end
+relative_path = CheckoutPath.relative(file_path, project_dir)
 
 runner = RulesRunner.from_env(script_name: 'write-rules-check', project_dir: project_dir, session_id: session_id)
 runner.apply_write_rules(

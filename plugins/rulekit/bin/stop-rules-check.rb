@@ -48,6 +48,7 @@
 require 'json'
 require 'fileutils'
 require_relative '../lib/abide_rubric'
+require_relative '../lib/checkout_path'
 require_relative '../lib/judge_log'
 require_relative '../lib/rules_runner'
 require_relative '../lib/working_tree'
@@ -75,6 +76,9 @@ session_id = input['session_id'].to_s
 project_dir = ENV['CLAUDE_PROJECT_DIR'].to_s
 exit 0 if project_dir.empty?
 
+# Git follows the session's cwd into a worktree; rules stay on CLAUDE_PROJECT_DIR.
+git_dir = CheckoutPath.git_dir(input['cwd'], project_dir)
+
 rules = RulesRunner.enabled(AbideRubric.rules(project_dir).merge(RulesRunner.all_rules(project_dir, 'write')))
 runner = RulesRunner.from_env(
   script_name: 'stop-rules-check',
@@ -101,14 +105,14 @@ end
 
 FileUtils.rm_f(turn_closed) if record_only
 if record_only || !File.exist?(turn_base)
-  head = WorkingTree.git(project_dir, 'rev-parse', 'HEAD')&.strip
+  head = WorkingTree.git(git_dir, 'rev-parse', 'HEAD')&.strip
   FileUtils.mkdir_p(session_dir)
   File.write(turn_base, head.to_s)
 end
 since = File.read(turn_base).strip
 since = nil if since.empty?
 
-changes = WorkingTree.moved_files(project_dir, snapshots, since: since)
+changes = WorkingTree.moved_files(git_dir, snapshots, since: since)
 exit 0 if changes.nil?
 
 rule_globs = stop_rules.each_value.flat_map { |rule| Array(rule['files']) }.uniq
@@ -133,7 +137,7 @@ counter = File.join(session_dir, 'stop-continuations')
 FileUtils.rm_f(counter) if record_only
 
 queue = Queue.new
-WorkingTree.each_addition(project_dir, snapshots, changes) do |change, added|
+WorkingTree.each_addition(git_dir, snapshots, changes) do |change, added|
   queue << [change, added] if !silent && judged.include?(change)
 end
 queue.close

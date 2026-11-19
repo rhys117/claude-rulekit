@@ -15,7 +15,7 @@
 #   tools:             Optional array of tool names. Defaults to [Bash, Grep, Glob].
 #                      Add "Read" to fire when the agent opens a file. Rule is
 #                      skipped when tool_name is not in this list.
-#   files:             Optional globs (relative to project root, ** supported)
+#   files:             Optional globs (relative to the git checkout, ** supported)
 #                      matched against the path the tool touches: the file_path
 #                      for Read, the search path for Grep/Glob. Omit to fire on
 #                      the tool match alone. Bash has no single path, so a rule
@@ -61,6 +61,7 @@
 # (with permissionDecisionReason). Warn rules surface as additionalContext.
 
 require 'json'
+require_relative '../lib/checkout_path'
 require_relative '../lib/rules_runner'
 
 # Tools this hook may fire on. Rules without an explicit `tools:` default to
@@ -82,11 +83,7 @@ exit 0 if rules.empty?
 # Path the tool touches, used for `files` globs: the file_path it reads, or the
 # path it searches. Bash has neither, so a rule with `files` never matches it.
 target_path = (tool_input['file_path'] || tool_input['path']).to_s
-relative_path = if !project_dir.empty? && target_path.start_with?("#{project_dir}/")
-                  target_path[(project_dir.length + 1)..]
-                else
-                  target_path
-end
+relative_path = CheckoutPath.relative(target_path, project_dir)
 
 # What the tool was asked for, used for `pattern`.
 subject = (tool_input['command'] || tool_input['pattern'] || tool_input['file_path']).to_s

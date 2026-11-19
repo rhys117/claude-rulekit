@@ -26,6 +26,7 @@ class Project
   end
 
   def cleanup
+    remove_worktree
     FileUtils.remove_entry(@root)
   end
 
@@ -68,6 +69,17 @@ class Project
 
   def git(*args)
     system('git', '-C', @root, *args, out: File::NULL, err: File::NULL, exception: true)
+  end
+
+  # A linked worktree of @root. CLAUDE_PROJECT_DIR stays on @root, which is what
+  # Claude Code does after a session enters a worktree.
+  def worktree
+    return @worktree if @worktree
+
+    @worktree_parent = Dir.mktmpdir('rulekit-worktree')
+    @worktree = File.join(@worktree_parent, 'checkout')
+    git('worktree', 'add', '--detach', '-q', @worktree)
+    @worktree
   end
 
   def session_dir(session)
@@ -130,6 +142,17 @@ class Project
   end
 
   private
+
+  def remove_worktree
+    return unless @worktree_parent
+
+    if @worktree && File.exist?(@root)
+      system('git', '-C', @root, 'worktree', 'remove', '--force', @worktree, out: File::NULL, err: File::NULL)
+    end
+    FileUtils.remove_entry(@worktree_parent) if File.exist?(@worktree_parent)
+    @worktree = nil
+    @worktree_parent = nil
+  end
 
   def run(script, payload, *args, env: {}, chdir: nil)
     environment = CLEARED.merge('CLAUDE_PROJECT_DIR' => @root).merge(@env).merge(env)

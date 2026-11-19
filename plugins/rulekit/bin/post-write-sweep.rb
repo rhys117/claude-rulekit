@@ -39,6 +39,7 @@
 # already landed and cannot be denied. Warn rules surface as additionalContext.
 
 require 'json'
+require_relative '../lib/checkout_path'
 require_relative '../lib/rules_runner'
 require_relative '../lib/working_tree'
 
@@ -77,13 +78,16 @@ session_id = input['session_id'].to_s
 project_dir = ENV['CLAUDE_PROJECT_DIR'].to_s
 exit 0 if project_dir.empty?
 
+# Git follows the session's cwd into a worktree; rules stay on CLAUDE_PROJECT_DIR.
+git_dir = CheckoutPath.git_dir(input['cwd'], project_dir)
+
 rules = RulesRunner.load_rules(project_dir, 'write')
 exit 0 if rules.empty?
 
 snapshots = WorkingTree::Snapshots.new(File.join(RulesRunner.session_dir(project_dir, session_id), 'snapshots'))
 was_initialized = snapshots.initialized?
 
-candidates = WorkingTree.moved_files(project_dir, snapshots)
+candidates = WorkingTree.moved_files(git_dir, snapshots)
 exit 0 if candidates.nil?
 
 # Record-only passes: the starting state of a session, a changeset too big to
@@ -104,7 +108,7 @@ runner = RulesRunner.from_env(
 rule_globs = rules.each_value.flat_map { |rule| rule.is_a?(Hash) ? Array(rule['files']) : [] }.uniq
 already_checked = pre_checked_path(input, project_dir)
 
-WorkingTree.each_addition(project_dir, snapshots, candidates) do |change, added|
+WorkingTree.each_addition(git_dir, snapshots, candidates) do |change, added|
   next if silent
   next if change.absolute == already_checked
   next unless runner.matches_globs?(rule_globs, change.relative, change.absolute)
